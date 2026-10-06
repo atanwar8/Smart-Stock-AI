@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartStock AI - Restaurant Inventory Management</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        .sidebar {
+            transition: all 0.3s;
+        }
+        .sidebar.collapsed {
+            width: 70px;
+        }
+        .sidebar.collapsed .nav-text {
+            display: none;
+        }
+        .main-content {
+            transition: margin-left 0.3s;
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .alert-pulse {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+        }
+        .smooth-transition {
+            transition: all 0.3s ease;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar -->
+        <div class="sidebar bg-indigo-800 text-white flex flex-col h-full">
+            <div class="p-4 flex items-center justify-between border-b border-indigo-700">
+                <div class="flex items-center">
+                    <i class="fas fa-robot text-2xl mr-3"></i>
+                    <span class="nav-text text-xl font-bold">SmartStock AI</span>
+                </div>
+                <button id="toggleSidebar" class="text-white focus:outline-none">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+            <nav class="flex-1 overflow-y-auto py-4">
+                <div class="px-4 mb-6">
+                    <div class="text-xs uppercase text-indigo-300 font-semibold mb-2 nav-text">Navigation</div>
+                    <ul>
+                        <li>
+                            <a href="#" class="tab-link active" data-tab="dashboard" class="flex items-center py-2 px-3 rounded-lg bg-indigo-700 text-white">
+                                <i class="fas fa-tachometer-alt mr-3"></i>
+                                <span class="nav-text">Dashboard</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="tab-link" data-tab="ordering" class="flex items-center py-2 px-3 rounded-lg hover:bg-indigo-700 text-indigo-200 hover:text-white">
+                                <i class="fas fa-shopping-cart mr-3"></i>
+                                <span class="nav-text">Smart Ordering</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="tab-link" data-tab="predictions" class="flex items-center py-2 px-3 rounded-lg hover:bg-indigo-700 text-indigo-200 hover:text-white">
+                                <i class="fas fa-chart-line mr-3"></i>
+                                <span class="nav-text">Predictions</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="tab-link" data-tab="alerts" class="flex items-center py-2 px-3 rounded-lg hover:bg-indigo-700 text-indigo-200 hover:text-white">
+                                <i class="fas fa-bell mr-3"></i>
+                                <span class="nav-text">Alerts</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+                <div class="px-4 mb-6">
+                    <div class="text-xs uppercase text-indigo-300 font-semibold mb-2 nav-text">Settings</div>
+                    <ul>
+                        <li>
+                            <a href="#" class="flex items-center py-2 px-3 rounded-lg hover:bg-indigo-700 text-indigo-200 hover:text-white">
+                                <i class="fas fa-cog mr-3"></i>
+                                <span class="nav-text">Settings</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="flex items-center py-2 px-3 rounded-lg hover:bg-indigo-700 text-indigo-200 hover:text-white">
+                                <i class="fas fa-question-circle mr-3"></i>
+                                <span class="nav-text">Help</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+            <div class="p-4 border-t border-indigo-700">
+                <div class="flex items-center">
+                    <img src="https://randomuser.me/api/portraits/women/44.jpg" alt="User" class="w-8 h-8 rounded-full mr-2">
+                    <div class="nav-text">
+                        <div class="text-sm font-medium">Sarah Johnson</div>
+                        <div class="text-xs text-indigo-300">Restaurant Manager</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content flex-1 overflow-y-auto">
+            <!-- Top Navigation -->
+            <header class="bg-white shadow-sm">
+                <div class="flex items-center justify-between px-6 py-4">
+                    <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
+                    <div class="flex items-center space-x-4">
+                        <div class="relative">
+                            <input type="text" placeholder="Search..." class="pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <i class="fas fa-search absolute left-3 top-3 text-gray-400"></i>
+                        </div>
+                        <button class="p-2 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                            <i class="fas fa-bell"></i>
+                            <span class="absolute top-0 right-0 h-2 w-2 rounded-full bg-red-500"></span>
+                        </button>
+                        <button class="p-2 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                            <i class="fas fa-envelope"></i>
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <div id="dashboard" class="tab-content active p-6">
+                <!-- KPI Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                    <div class="bg-white rounded-xl shadow-md p-6 card-hover smooth-transition">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-gray-500 text-sm font-medium">Inventory Value</p>
+                                <h3 class="text-2xl font-bold text-gray-800">$12,458</h3>
+                                <p class="text-green-500 text-sm mt-1"><i class="fas fa-arrow-up mr-1"></i> 8.2% from last week</p>
+                            </div>
+                            <div class="p-3 rounded-full bg-indigo-100 text-indigo-600">
+                                <i class="fas fa-box-open text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-md p-6 card-hover smooth-transition">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-gray-500 text-sm font-medium">Waste Reduction</p>
+                                <h3 class="text-2xl font-bold text-gray-800">32.7%</h3>
+                                <p class="text-green-500 text-sm mt-1"><i class="fas fa-arrow-up mr-1"></i> 4.5% improvement</p>
+                            </div>
+                            <div class="p-3 rounded-full bg-green-100 text-green-600">
+                                <i class="fas fa-recycle text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-md p-6 card-hover smooth-transition">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-gray-500 text-sm font-medium">Monthly Savings</p>
+                                <h3 class="text-2xl font-bold text-gray-800">$2,845</h3>
+                                <p class="text-green-500 text-sm mt-1"><i class="fas fa-arrow-up mr-1"></i> 12.1% from last month</p>
+                            </div>
+                            <div class="p-3 rounded-full bg-blue-100 text-blue-600">
+                                <i class="fas fa-dollar-sign text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow-md p-6 card-hover smooth-transition">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-gray-500 text-sm font-medium">Forecast Accuracy</p>
+                                <h3 class="text-2xl font-bold text-gray-800">87.3%</h3>
+                                <p class="text-red-500 text-sm mt-1"><i class="fas fa-arrow-down mr-1"></i> 2.1% from last week</p>
+                            </div>
+                            <div class="p-3 rounded-full bg-purple-100 text-purple-600">
+                                <i class="fas fa-chart-bar text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Inventory Status and Chart -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    <!-- Inventory Status -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-gray-800">Inventory Status</h2>
+                            <button class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">View All</button>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="alert-pulse bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg">
+                                <div class="flex items-center">
+                                    <div class="flex-shrink-0">
+                                        <i class="fas fa-exclamation-circle text-red-500"></i>
+                                    </div>
+                                    <div class="ml-3">
+                                        <p class="text-sm font-medium text-red-800">Tomatoes - Critical</p>
+                                        <p class="text-sm text-red-600">Stock will run out in 2 days</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded-r-lg">
+                                <div class="flex items-center">
+                                    <div class="flex-shrink-0">
+                                        <i class="fas fa-exclamation-triangle text-yellow-500"></i>
+                                    </div>
+                                    <div class="ml-3">
+                                        <p class="text-sm font-medium text-yellow-800">Lettuce - High</p>
+                                        <p class="text-sm text-yellow-600">Stock will run out in 5 days</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-green-50 border-l-4 border-green-500 p-4 rounded-r-lg">
+                                <div class="flex items-center">
+                                    <div class="flex-shrink-0">
+                                        <i class="fas fa-check-circle text-green-500"></i>
+                                    </div>
+                                    <div class="ml-3">
+                                        <p class="text-sm font-medium text-green-800">Onions - Good</p>
+                                        <p class="text-sm text-green-600">Stock for 12 days available</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-r-lg">
+                                <div class="flex items-center">
+                                    <div class="flex-shrink-0">
+                                        <i class="fas fa-info-circle text-blue-500"></i>
+                                    </div>
+                                    <div class="ml-3">
+                                        <p class="text-sm font-medium text-blue-800">Potatoes - Opportunity</p>
+                                        <p class="text-sm text-blue-600">Prices dropping 8% next week</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Price Chart -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-2">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-gray-800">30-Day Price Trends</h2>
+                            <div class="flex space-x-2">
+                                <select class="border rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>All Ingredients</option>
+                                    <option selected>Tomatoes</option>
+                                    <option>Lettuce</option>
+                                    <option>Onions</option>
+                                    <option>Potatoes</option>
+                                </select>
+                                <select class="border rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>Last 7 Days</option>
+                                    <option selected>Last 30 Days</option>
+                                    <option>Last 90 Days</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div id="priceChart" class="h-64"></div>
+                    </div>
+                </div>
+
+                <!-- Inventory Table -->
+                <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <h2 class="text-lg font-semibold text-gray-800">Inventory Overview</h2>
+                            <button class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">Export Data</button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ingredient</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Usage</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Days Left</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shelf Life</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price Trend</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <div class="flex-shrink-0 h-10 w-10">
+                                                <img class="h-10 w-10 rounded-full" src="https://cdn-icons-png.flaticon.com/512/2909/2909896.png" alt="Tomato">
+                                            </div>
+                                            <div class="ml-4">
+                                                <div class="text-sm font-medium text-gray-900">Tomatoes</div>
+                                                <div class="text-sm text-gray-500">Organic, Midwest</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">24 lbs</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">8 lbs/day</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">3 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">7 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Critical</span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <i class="fas fa-arrow-up text-red-500 mr-1"></i>
+                                            <span class="text-sm text-gray-900">+12% next week</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button class="text-indigo-600 hover:text-indigo-900">Order Now</button>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <div class="flex-shrink-0 h-10 w-10">
+                                                <img class="h-10 w-10 rounded-full" src="https://cdn-icons-png.flaticon.com/512/535/535183.png" alt="Lettuce">
+                                            </div>
+                                            <div class="ml-4">
+                                                <div class="text-sm font-medium text-gray-900">Lettuce</div>
+                                                <div class="text-sm text-gray-500">Romaine, Local</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">15 heads</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">3 heads/day</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">5 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">10 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">High</span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <i class="fas fa-arrow-right text-gray-500 mr-1"></i>
+                                            <span class="text-sm text-gray-900">Stable</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button class="text-indigo-600 hover:text-indigo-900">Order Now</button>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <div class="flex-shrink-0 h-10 w-10">
+                                                <img class="h-10 w-10 rounded-full" src="https://cdn-icons-png.flaticon.com/512/2909/2909899.png" alt="Onion">
+                                            </div>
+                                            <div class="ml-4">
+                                                <div class="text-sm font-medium text-gray-900">Onions</div>
+                                                <div class="text-sm text-gray-500">Yellow, Midwest</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">50 lbs</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">4 lbs/day</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">12.5 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">30 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Good</span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <i class="fas fa-arrow-down text-green-500 mr-1"></i>
+                                            <span class="text-sm text-gray-900">-5% next week</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button class="text-gray-600 hover:text-gray-900">Hold</button>
+                                    </td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <div class="flex-shrink-0 h-10 w-10">
+                                                <img class="h-10 w-10 rounded-full" src="https://cdn-icons-png.flaticon.com/512/2909/2909897.png" alt="Potato">
+                                            </div>
+                                            <div class="ml-4">
+                                                <div class="text-sm font-medium text-gray-900">Potatoes</div>
+                                                <div class="text-sm text-gray-500">Russet, Idaho</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">80 lbs</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">5 lbs/day</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">16 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">60 days</div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">Opportunity</span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="flex items-center">
+                                            <i class="fas fa-arrow-down text-green-500 mr-1"></i>
+                                            <span class="text-sm text-gray-900">-8% next week</span>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button class="text-indigo-600 hover:text-indigo-900">Plan Order</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Smart Ordering Tab -->
+            <div id="ordering" class="tab-content p-6">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Ingredient Selector and Stock Inputs -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Ingredient Details</h2>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Select Ingredient</label>
+                                <select class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>Tomatoes</option>
+                                    <option>Lettuce</option>
+                                    <option>Onions</option>
+                                    <option>Potatoes</option>
+                                    <option>Carrots</option>
+                                    <option>Bell Peppers</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Current Stock</label>
+                                <input type="number" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Enter current stock">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Daily Usage</label>
+                                <input type="number" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Enter daily usage">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Storage Capacity</label>
+                                <input type="number" class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Enter max capacity">
+                            </div>
+                            <button class="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                Update Inventory
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Weather & Sentiment Panel -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Market Factors</h2>
+                        <div class="space-y-6">
+                            <div>
+                                <h3 class="text-md font-medium text-gray-700 mb-2">Weather Conditions</h3>
+                                <div class="flex items-center space-x-4">
+                                    <div class="text-4xl">
+                                        <i class="fas fa-sun text-yellow-400"></i>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-gray-600">Chicago, IL</p>
+                                        <p class="text-lg font-semibold">72°F, Sunny</p>
+                                        <p class="text-sm text-gray-600">Humidity: 45%</p>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    <p class="text-sm text-gray-600">Next 7 days: Mostly sunny, 5% chance of rain</p>
+                                </div>
+                            </div>
+                            <div>
+                                <h3 class="text-md font-medium text-gray-700 mb-2">Market Sentiment</h3>
+                                <div class="flex items-center space-x-2">
+                                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                        <div class="bg-green-600 h-2.5 rounded-full" style="width: 65%"></div>
+                                    </div>
+                                    <span class="text-sm font-medium text-gray-700">65% Positive</span>
+                                </div>
+                                <p class="text-sm text-gray-600 mt-1">Based on recent USDA reports and news sentiment</p>
+                            </div>
+                            <div>
+                                <h3 class="text-md font-medium text-gray-700 mb-2">Crop Conditions</h3>
+                                <div class="grid grid-cols-3 gap-2 text-center">
+                                    <div class="bg-green-50 p-2 rounded-lg">
+                                        <p class="text-xs text-gray-500">Good</p>
+                                        <p class="font-semibold">78%</p>
+                                    </div>
+                                    <div class="bg-yellow-50 p-2 rounded-lg">
+                                        <p class="text-xs text-gray-500">Fair</p>
+                                        <p class="font-semibold">15%</p>
+                                    </div>
+                                    <div class="bg-red-50 p-2 rounded-lg">
+                                        <p class="text-xs text-gray-500">Poor</p>
+                                        <p class="font-semibold">7%</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Order Recommendation -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Smart Order Recommendation</h2>
+                        <div class="bg-indigo-50 border-l-4 border-indigo-500 p-4 rounded-r-lg mb-4">
+                            <div class="flex">
+                                <div class="flex-shrink-0">
+                                    <i class="fas fa-lightbulb text-indigo-500"></i>
+                                </div>
+                                <div class="ml-3">
+                                    <p class="text-sm text-indigo-700">
+                                        <span class="font-semibold">AI Recommendation:</span> Order 40 lbs of tomatoes now to cover next 5 days of demand. Prices expected to rise 12% next week.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Recommended Order Quantity</label>
+                                <input type="number" value="40" class="w-full border rounded-lg px-3 py-2 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500" readonly>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Current Market Price</label>
+                                <div class="flex">
+                                    <span class="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                                    <input type="number" value="1.85" class="rounded-none rounded-r-lg border border-gray-300 w-full px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" readonly>
+                                    <span class="inline-flex items-center px-3 rounded-r-lg border border-l-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">/lb</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Estimated Total Cost</label>
+                                <div class="flex">
+                                    <span class="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-gray-300 bg-gray-50 text-gray-500 text-sm">$</span>
+                                    <input type="number" value="74.00" class="rounded-none rounded-r-lg border border-gray-300 w-full px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500" readonly>
+                                </div>
+                            </div>
+                            <div class="pt-2">
+                                <button class="w-full bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
+                                    <i class="fas fa-check-circle mr-2"></i> Confirm Order
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 7-Day Forecast Plot -->
+                <div class="bg-white rounded-xl shadow-md p-6 mt-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-semibold text-gray-800">7-Day Price Forecast</h2>
+                        <div class="flex space-x-2">
+                            <button class="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-lg text-sm">Tomatoes</button>
+                            <button class="bg-gray-100 text-gray-800 px-3 py-1 rounded-lg text-sm">Lettuce</button>
+                            <button class="bg-gray-100 text-gray-800 px-3 py-1 rounded-lg text-sm">Onions</button>
+                            <button class="bg-gray-100 text-gray-800 px-3 py-1 rounded-lg text-sm">Potatoes</button>
+                        </div>
+                    </div>
+                    <div id="forecastChart" class="h-64"></div>
+                </div>
+            </div>
+
+            <!-- Predictions Tab -->
+            <div id="predictions" class="tab-content p-6">
+                <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-semibold text-gray-800">Extended Price Forecasts</h2>
+                        <div class="flex space-x-2">
+                            <select class="border rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option>7-Day</option>
+                                <option selected>14-Day</option>
+                                <option>30-Day</option>
+                            </select>
+                            <select class="border rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option>Tomatoes</option>
+                                <option>Lettuce</option>
+                                <option selected>Onions</option>
+                                <option>Potatoes</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="extendedForecastChart" class="h-80"></div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <!-- Seasonal Pattern Heatmap -->
+                    <div class="bg-white rounded-xl shadow-md p-6">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Seasonal Price Patterns</h2>
+                        <div id="heatmapChart" class="h-64"></div>
+                        <div class="mt-4 text-sm text-gray-600">
+                            <p>Historical price patterns show onions typically peak in late summer and reach lows in early spring.</p>
+                        </div>
+                    </div>
+
+                    <!-- Volatility Gauge -->
+                    <div class="bg-white rounded-xl shadow-md p-6">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Market Volatility</h2>
+                        <div class="flex justify-center">
+                            <div id="gaugeChart" class="w-full h-64"></div>
+                        </div>
+                        <div class="mt-4 text-sm text-gray-600">
+                            <p>Current market volatility is moderate (6.2/10). Expect price swings of ±8% over the next 14 days.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Downloadable Reports -->
+                <div class="bg-white rounded-xl shadow-md p-6 mt-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-lg font-semibold text-gray-800">Download Reports</h2>
+                        <button class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">View All Reports</button>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h3 class="font-medium text-gray-800">Weekly Price Report</h3>
+                                    <p class="text-sm text-gray-500">Updated: Today</p>
+                                </div>
+                                <i class="fas fa-file-pdf text-red-500"></i>
+                            </div>
+                            <button class="mt-3 text-sm text-indigo-600 hover:text-indigo-800">Download PDF</button>
+                        </div>
+                        <div class="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h3 class="font-medium text-gray-800">Inventory Analysis</h3>
+                                    <p class="text-sm text-gray-500">Updated: Yesterday</p>
+                                </div>
+                                <i class="fas fa-file-excel text-green-500"></i>
+                            </div>
+                            <button class="mt-3 text-sm text-indigo-600 hover:text-indigo-800">Download Excel</button>
+                        </div>
+                        <div class="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <h3 class="font-medium text-gray-800">Monthly Forecast</h3>
+                                    <p class="text-sm text-gray-500">Updated: 3 days ago</p>
+                                </div>
+                                <i class="fas fa-file-csv text-blue-500"></i>
+                            </div>
+                            <button class="mt-3 text-sm text-indigo-600 hover:text-indigo-800">Download CSV</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alerts Tab -->
+            <div id="alerts" class="tab-content p-6">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Alert Configuration -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Alert Settings</h2>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Low Stock Threshold</label>
+                                <select class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>1 day</option>
+                                    <option>2 days</option>
+                                    <option selected>3 days</option>
+                                    <option>5 days</option>
+                                    <option>7 days</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Price Change Alert</label>
+                                <select class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>1%</option>
+                                    <option>3%</option>
+                                    <option selected>5%</option>
+                                    <option>10%</option>
+                                    <option>15%</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Spoilage Warning</label>
+                                <select class="w-full border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    <option>1 day before</option>
+                                    <option selected>2 days before</option>
+                                    <option>3 days before</option>
+                                </select>
+                            </div>
+                            <div class="pt-2">
+                                <button class="w-full bg-indigo-600 text-white py-2 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    Save Settings
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Notification Channels -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <h2 class="text-lg font-semibold text-gray-800 mb-4">Notification Channels</h2>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center">
+                                    <i class="fas fa-envelope text-gray-600 mr-3"></i>
+                                    <span class="text-sm font-medium text-gray-700">Email</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" value="" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center">
+                                    <i class="fas fa-mobile-alt text-gray-600 mr-3"></i>
+                                    <span class="text-sm font-medium text-gray-700">SMS</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" value="" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center">
+                                    <i class="fas fa-bell text-gray-600 mr-3"></i>
+                                    <span class="text-sm font-medium text-gray-700">Push Notification</span>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" value="" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                            <div class="pt-6">
+                                <h3 class="text-md font-medium text-gray-700 mb-2">Alert Frequency</h3>
+                                <div class="flex space-x-2">
+                                    <button class="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-lg text-sm">Immediate</button>
+                                    <button class="bg-gray-100 text-gray-800 px-3 py-1 rounded-lg text-sm">Daily Digest</button>
+                                    <button class="bg-gray-100 text-gray-800 px-3 py-1 rounded-lg text-sm">Weekly Summary</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Alert Log -->
+                    <div class="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-gray-800">Recent Alerts</h2>
+                            <button class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">View All</button>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="border-l-4 border-red-500 pl-4 py-2">
+                                <div class="flex justify-between">
+                                    <p class="text-sm font-medium text-gray-800">Critical Stock Alert</p>
+                                    <span class="text-xs text-gray-500">10 min ago</span>
+                                </div>
+                                <p class="text-sm text-gray-600">Tomatoes stock will run out in 2 days</p>
+                            </div>
+                            <div class="border-l-4 border-yellow-500 pl-4 py-2">
+                                <div class="flex justify-between">
+                                    <p class="text-sm font-medium text-gray-800">Price Increase Warning</p>
+                                    <span class="text-xs text-gray-500">2 hours ago</span>
+                                </div>
+                                <p class="text-sm text-gray-600">Onion prices expected to rise 5% in 3 days</p>
+                            </div>
+                            <div class="border-l-4 border-blue-500 pl-4 py-2">
+                                <div class="flex justify-between">
+                                    <p class="text-sm font-medium text-gray-800">Order Opportunity</p>
+                                    <span class="text-xs text-gray-500">5 hours ago</span>
+                                </div>
+                                <p class="text-sm text-gray-600">Potato prices dropping 8% next week</p>
+                            </div>
+                            <div class="border-l-4 border-green-500 pl-4 py-2">
+                                <div class="flex justify-between">
+                                    <p class="text-sm font-medium text-gray-800">Inventory Update</p>
+                                    <span class="text-xs text-gray-500">Yesterday</span>
+                                </div>
+                                <p class="text-sm text-gray-600">Lettuce stock replenished</p>
+                            </div>
+                            <div class="border-l-4 border-purple-500 pl-4 py-2">
+                                <div class="flex justify-between">
+                                    <p class="text-sm font-medium text-gray-800">System Notification</p>
+                                    <span class="text-xs text-gray-500">2 days ago</span>
+                                </div>
+                                <p class="text-sm text-gray-600">New USDA price data imported</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Toggle sidebar
+        document.getElementById('toggleSidebar').addEventListener('click', function() {
+            document.querySelector('.sidebar').classList.toggle('collapsed');
+            document.querySelector('.main-content').classList.toggle('lg:ml-20');
+        });
+
+        // Tab switching
+        const tabLinks = document.querySelectorAll('.tab-link');
+        const tabContents = document.querySelectorAll('.tab-content');
+
+        tabLinks.forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                // Update active tab link
+                tabLinks.forEach(l => l.classList.remove('active', 'bg-indigo-700', 'text-white'));
+                tabLinks.forEach(l => l.classList.add('hover:bg-indigo-700', 'text-indigo-200', 'hover:text-white'));
+                this.classList.add('active', 'bg-indigo-700', 'text-white');
+                this.classList.remove('hover:bg-indigo-700', 'text-indigo-200', 'hover:text-white');
+                
+                // Update active tab content
+                const tabId = this.getAttribute('data-tab');
+                tabContents.forEach(content => content.classList.remove('active'));
+                document.getElementById(tabId).classList.add('active');
+                
+                // Update header title
+                document.querySelector('header h1').textContent = this.querySelector('.nav-text').textContent;
+            });
+        });
+
+        // Charts
+        document.addEventListener('DOMContentLoaded', function() {
+            // Price Chart
+            const priceData = {
+                x: ['Jan 1', 'Jan 8', 'Jan 15', 'Jan 22', 'Jan 29', 'Feb 5', 'Feb 12'],
+                y: [1.65, 1.72, 1.68, 1.75, 1.80, 1.85, 1.92],
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Actual Price',
+                line: {color: '#4F46E5', width: 3},
+                marker: {size: 8}
+            };
+
+            const forecastData = {
+                x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
+                y: [1.92, 2.05, 2.12, 2.15],
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Forecast',
+                line: {color: '#10B981', width: 3, dash: 'dot'},
+                marker: {size: 8}
+            };
+
+            const confidenceUpper = {
+                x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
+                y: [1.92, 2.15, 2.25, 2.30],
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Upper Bound',
+                line: {color: '#10B981', width: 1},
+                fillcolor: 'rgba(16, 185, 129, 0.2)',
+                fill: 'tonexty'
+            };
+
+            const confidenceLower = {
+                x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
+                y: [1.92, 1.95, 1.99, 2.00],
+                type: 'scatter',
+                mode: 'lines',
+                name: 'Lower Bound',
+                line: {color: '#10B981', width: 1},
+                fillcolor: 'rgba(16, 185, 129, 0.2)'
+            };
+
+            const priceLayout = {
+                title: '',
+                xaxis: {title: 'Date'},
+                yaxis: {title: 'Price per lb ($)'},
+                showlegend: true,
+                legend: {orientation: 'h', y: 1.1},
+                margin: {t: 0},
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)'
+            };
+
+            Plotly.newPlot('priceChart', [priceData, forecastData, confidenceUpper, confidenceLower], priceLayout);
+
+            // Forecast Chart
+            const forecastChartData = [
+                {
+                    x: ['Today', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Day 7'],
+                    y: [1.85, 1.88, 1.92, 1.95, 2.01, 2.05, 2.08],
+                    type: 'bar',
+                    name: 'Predicted Price',
+                    marker: {color: '#4F46E5'}
+                }
+            ];
+
+            const forecastChartLayout = {
+                title: '',
+                xaxis: {title: 'Day'},
+                yaxis: {title: 'Price per lb ($)'},
+                showlegend: false,
+                margin: {t: 0},
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)'
+            };
+
+            Plotly.newPlot('forecastChart', forecastChartData, forecastChartLayout);
+
+            // Extended Forecast Chart
+            const extendedForecastData = [
+                {
+                    x: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    y: [1.85, 1.92, 1.98, 2.05],
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: 'Base Forecast',
+                    line: {color: '#4F46E5', width: 3}
+                },
+                {
+                    x: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    y: [1.85, 2.05, 2.15, 2.25],
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Optimistic',
+                    line: {color: '#10B981', width: 1, dash: 'dash'}
+                },
+                {
+                    x: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+                    y: [1.85, 1.80, 1.75, 1.70],
+                    type: 'scatter',
+                    mode: 'lines',
+                    name: 'Pessimistic',
+                    line: {color: '#EF4444', width: 1, dash: 'dash'}
+                }
+            ];
+
+            const extendedForecastLayout = {
+                title: '',
+                xaxis: {title: 'Week'},
+                yaxis: {title: 'Price per lb ($)'},
+                showlegend: true,
+                legend: {orientation: 'h', y: 1.1},
+                margin: {t: 0},
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)'
+            };
+
+            Plotly.newPlot('extendedForecastChart', extendedForecastData, extendedForecastLayout);
+
+            // Heatmap Chart
+            const heatmapData = [
+                {
+                    z: [
+                        [1.50, 1.55, 1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.80, 1.75, 1.70, 1.65],
+                        [1.55, 1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.85, 1.80, 1.75, 1.70],
+                        [1.60, 1.65, 1.70, 1.75, 1.80, 1.85, 1.90, 1.95, 1.90, 1.85, 1.80, 1.75]
+                    ],
+                    x: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                    y: ['2021', '2022', '2023'],
+                    type: 'heatmap',
+                    colorscale: 'Viridis'
+                }
+            ];
+
+            const heatmapLayout = {
+                title: '',
+                xaxis: {title: 'Month'},
+                yaxis: {title: 'Year'},
+                margin: {t: 0},
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)'
+            };
+
+            Plotly.newPlot('heatmapChart', heatmapData, heatmapLayout);
+
+            // Gauge Chart
+            const gaugeData = [
+                {
+                    domain: {x: [0, 1], y: [0, 1]},
+                    value: 6.2,
+                    title: {text: "Market Volatility"},
+                    type: "indicator",
+                    mode: "gauge+number",
+                    gauge: {
+                        axis: {range: [0, 10]},
+                        steps: [
+                            {range: [0, 3], color: "green"},
+                            {range: [3, 7], color: "yellow"},
+                            {range: [7, 10], color: "red"}
+                        ],
+                        threshold: {
+                            line: {color: "red", width: 4},
+                            thickness: 0.75,
+                            value: 6.2
+                        }
+                    }
+                }
+            ];
+
+            const gaugeLayout = {
+                margin: {t: 0, b: 0},
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: 'rgba(0,0,0,0)'
+            };
+
+            Plotly.newPlot('gaugeChart', gaugeData, gaugeLayout);
+        });
+    </script>
+
+    <!-- SmartStock AI Backend Integration -->
+    <script src="frontend_integration.js"></script>
+
+    <!-- SmartStock AI Backend Integration -->
+    <script src="frontend_integration.js"></script>
+
+    <!-- SmartStock AI Backend Integration -->
+    <script src="frontend_integration.js"></script>
+</body>
+</html>

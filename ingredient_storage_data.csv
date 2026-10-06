@@ -1,0 +1,12 @@
+Crop,Environment,Temperature,Humidity,StorageLife,StorageLifeDays
+Asparagus,"Cool and Humid","32-36°F","95-98%",2-3 weeks,14
+Broccoli,"Cool and Humid","32-36°F","95-98%",2-3 weeks,14
+Cabbage,"Cool and Humid","32-36°F","95-98%",1-6 months,30
+Carrots,"Cool and Humid","32-36°F","95-98%",5-6 months,150
+Cauliflower,"Cool and Humid","32-36°F","95-98%",2-3 weeks,14
+Cucumbers,"Warm and Humid","50-54°F","90-95%",1-2 weeks,7
+Lettuce,"Cool and Humid","32-36°F","95-98%",1-2 weeks,7
+Onions (Green),"Cool and Humid","32-36°F","95-98%",3-4 weeks,21
+Peppers,"Humid","45°F","95%",2-3 weeks,14
+Sweet Potatoes,"Warm and Humid","50-60°F","90-95%",6-9 months,180
+Tomatoes,"Warm and Humid","50-60°F","90-95%",2-14 days,2
