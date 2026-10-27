@@ -44,21 +44,51 @@ def test_rows_map_to_the_training_csv_columns():
     assert row["priorwk_wtd_avg_price"] == 2.09
 
 
-def test_request_uses_basic_auth_and_keeps_commas_inside_commodity_names():
+def test_request_uses_basic_auth_and_percent_encodes_names():
     calls = []
 
     def fake_get(url, auth, timeout):
         calls.append((url, auth))
-        return FakeResponse([detail_row("Onions, Green")])
+        return FakeResponse([detail_row("Sweet Potatoes")])
 
-    usda_api.fetch_commodity("KEY", "Onions, Green", date(2026, 10, 1), date(2026, 10, 27), get=fake_get)
+    usda_api.fetch_commodity("KEY", "Sweet Potatoes", date(2026, 10, 1), date(2026, 10, 27), get=fake_get)
 
     url, auth = calls[0]
     assert auth == ("KEY", "")
     assert "/reports/3324/Report%20Details?q=" in url
     query = url.split("?q=", 1)[1]
-    assert "Onions%2C%20Green" in query                # the comma is part of the name, not a list separator
-    assert unquote(query) == "commodity=Onions, Green;report_begin_date=10/01/2026:10/27/2026"
+    assert "Sweet%20Potatoes" in query
+    assert unquote(query) == "commodity=Sweet Potatoes;report_begin_date=10/01/2026:10/27/2026"
+
+
+def test_names_with_commas_are_fetched_by_class_and_unit():
+    # MARS splits filter values on commas (even %2C), so "Onions, Green" can't be a commodity filter
+    queries = []
+
+    def fake_get(url, auth, timeout):
+        queries.append(unquote(url.split("?q=", 1)[1]))
+        return FakeResponse([detail_row("Onions, Green", size="per bunch"), detail_row("Radishes", size="per bunch")])
+
+    rows = usda_api.fetch_commodity("KEY", "Onions, Green", date(2026, 10, 1), date(2026, 10, 27),
+                                    get=fake_get, unit="per bunch", community="Vegetables")
+
+    assert queries == ["community=Vegetables;size=per bunch;report_begin_date=10/01/2026:10/27/2026"]
+    assert [r["commodity"] for r in rows] == ["Onions, Green"]
+
+
+def test_refresh_looks_up_comma_names_with_their_stored_unit(tmp_path):
+    train = tmp_path / "train.csv"
+    usda_api.to_frame([detail_row("Onions, Green", end="10/16/2026", size="per bunch")]).to_csv(train, index=False)
+    queries = []
+
+    def fake_get(url, auth, timeout):
+        queries.append(unquote(url))
+        return FakeResponse([detail_row("Onions, Green", end="10/23/2026", size="per bunch")])
+
+    result = usda_api.refresh_training_data(train, ["Onions, Green"], api_key="KEY", today=date(2026, 10, 27), get=fake_get)
+
+    assert all("size=per bunch" in q and "Onions" not in q.split("?q=")[1] for q in queries)
+    assert result["rows_added"] == 1 and result["empty_commodities"] == []
 
 
 def test_a_full_page_is_split_into_smaller_date_ranges():

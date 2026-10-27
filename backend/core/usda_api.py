@@ -51,10 +51,13 @@ class MissingApiKey(RuntimeError):
     """MARS_API_KEY is not set."""
 
 
-def fetch_commodity(api_key: str, commodity: str, start: date, end: date, get: Getter = requests.get) -> List[Dict]:
-    """All "Report Details" rows for one commodity with report weeks starting between start and end."""
-    # Commas separate values in MARS filters, so a name like "Onions, Green" has to be percent-encoded
-    query = f"commodity={quote(commodity, safe='')};report_begin_date={start:%m/%d/%Y}:{end:%m/%d/%Y}"
+def fetch_rows(api_key: str, filters: Dict[str, str], start: date, end: date, get: Getter = requests.get) -> List[Dict]:
+    """All "Report Details" rows matching the filters, for report weeks starting between start and end."""
+    for value in filters.values():
+        if ',' in value or ';' in value:
+            raise ValueError(f"MARS filter values can't contain ',' or ';': {value!r}")
+    query = ';'.join(f"{field}={quote(value, safe='')}" for field, value in filters.items())
+    query += f";report_begin_date={start:%m/%d/%Y}:{end:%m/%d/%Y}"
     url = f"{API_BASE}/reports/{REPORT_ID}/{quote(SECTION)}?q={query}"
     response = get(url, auth=(api_key, ''), timeout=60)
     response.raise_for_status()
@@ -62,9 +65,24 @@ def fetch_commodity(api_key: str, commodity: str, start: date, end: date, get: G
 
     if len(rows) >= PAGE_SIZE and end > start:
         middle = start + (end - start) / 2
-        return (fetch_commodity(api_key, commodity, start, middle, get)
-                + fetch_commodity(api_key, commodity, middle + timedelta(days=1), end, get))
+        return (fetch_rows(api_key, filters, start, middle, get)
+                + fetch_rows(api_key, filters, middle + timedelta(days=1), end, get))
     return rows
+
+
+def fetch_commodity(api_key: str, commodity: str, start: date, end: date, get: Getter = requests.get,
+                    unit: str = None, community: str = 'Vegetables') -> List[Dict]:
+    """All "Report Details" rows for one commodity with report weeks starting between start and end.
+
+    MARS splits filter values on commas (even when percent-encoded), so a name like "Onions, Green"
+    can't be a commodity filter. Those are fetched by class and unit, then narrowed to the commodity.
+    """
+    if ',' not in commodity:
+        return fetch_rows(api_key, {'commodity': commodity}, start, end, get)
+    if not unit:
+        raise ValueError(f"{commodity!r} needs its unit (e.g. 'per bunch') to be looked up")
+    rows = fetch_rows(api_key, {'community': community, 'size': unit}, start, end, get)
+    return [row for row in rows if row.get('commodity') == commodity]
 
 
 def to_frame(rows: Iterable[Dict]) -> pd.DataFrame:
@@ -115,17 +133,20 @@ def refresh_training_data(train_path, commodities: Iterable[str], api_key: str =
         raise MissingApiKey("Set MARS_API_KEY to a free MyMarketNews API key (mymarketnews.ams.usda.gov, My Profile).")
 
     train_path = Path(train_path)
-    existing = pd.read_csv(train_path, usecols=['report_date'])
+    existing = pd.read_csv(train_path, usecols=['report_date', 'class', 'commodity', 'unit'])
     newest = pd.to_datetime(existing['report_date'], format=DATE_FORMAT, errors='coerce').max().date()
     start, end = newest - timedelta(days=6), today or date.today()
 
     rows, empty = [], []
     for commodity in commodities:
+        # Class and most common unit, needed to look up names that contain a comma
+        stored = existing[existing['commodity'] == commodity]
+        hints = {'unit': stored['unit'].mode().iloc[0], 'community': stored['class'].mode().iloc[0]} if len(stored) else {}
         found = []
         chunk_start = start
         while chunk_start <= end:
             chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end)
-            found += fetch_commodity(api_key, commodity, chunk_start, chunk_end, get)
+            found += fetch_commodity(api_key, commodity, chunk_start, chunk_end, get, **hints)
             chunk_start = chunk_end + timedelta(days=1)
         rows += found
         if not found:
