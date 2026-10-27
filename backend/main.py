@@ -16,7 +16,6 @@ import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 import uuid
-import random
 import subprocess
 import sys
 import asyncio
@@ -90,7 +89,6 @@ class AlertManager:
     
     def __init__(self):
         self.settings = AlertSettings()
-        self.alert_counter = 0
         
     def get_settings(self) -> AlertSettings:
         """Get current alert settings"""
@@ -107,144 +105,53 @@ class AlertManager:
             return False
             
     def generate_recent_alerts(self, inventory_data: List[Dict], forecaster=None) -> List[AlertItem]:
-        """Generate dynamic recent alerts based on current conditions"""
+        """Alerts from current stock levels and the price forecasts, most urgent first"""
         alerts = []
-        current_time = datetime.now()
-        
-        try:
-            # Generate inventory-based alerts
-            for item in inventory_data:
-                ingredient = item['ingredient']
-                days_left = item['days_left']
-                status = item['status']
-                
-                # Critical stock alerts
-                if days_left <= self.settings.low_stock_threshold:
-                    alerts.append(AlertItem(
-                        id=f"critical_{ingredient}_{self.alert_counter}",
-                        type="critical",
-                        title="Critical Stock Alert",
-                        message=f"{ingredient} stock will run out in {days_left:.1f} days",
-                        timestamp=self._get_relative_time(current_time, minutes_ago=random.randint(5, 30)),
-                        commodity=ingredient
-                    ))
-                    self.alert_counter += 1
-                    print(f"🚨 Critical alert generated: {ingredient} ({days_left:.1f} days left)")
-                
-                # Spoilage warnings
-                shelf_life = item.get('shelf_life', 7)
-                spoilage_threshold = shelf_life - self.settings.spoilage_warning
-                if days_left <= spoilage_threshold and status != "critical":
-                    alerts.append(AlertItem(
-                        id=f"spoilage_{ingredient}_{self.alert_counter}",
-                        type="warning", 
-                        title="Spoilage Warning",
-                        message=f"{ingredient} approaching expiration in {days_left:.1f} days",
-                        timestamp=self._get_relative_time(current_time, hours_ago=random.randint(1, 6)),
-                        commodity=ingredient
-                    ))
-                    self.alert_counter += 1
-            
-            # Generate price-based alerts using available commodities
-            available_commodities = ['Onions, Green', 'Sweet Potatoes', 'Cauliflower', 'Cabbage']
-            for commodity in available_commodities[:2]:  # Limit to 2 price alerts
-                price_change = random.uniform(-12, 15)  # -12% to +15%
-                
-                if abs(price_change) >= self.settings.price_change_alert:
-                    if price_change > 0:
-                        alert_type = "warning"
-                        title = "Price Increase Warning"
-                        message = f"{commodity} prices expected to rise {price_change:.1f}% in 3 days"
-                    else:
-                        alert_type = "info"
-                        title = "Order Opportunity"
-                        message = f"{commodity} prices dropping {abs(price_change):.1f}% next week"
-                    
-                    alerts.append(AlertItem(
-                        id=f"price_{commodity}_{self.alert_counter}",
-                        type=alert_type,
-                        title=title,
-                        message=message,
-                        timestamp=self._get_relative_time(current_time, hours_ago=random.randint(2, 8)),
-                        commodity=commodity
-                    ))
-                    self.alert_counter += 1
-            
-            # Generate inventory update alerts for recently added items
-            if inventory_data:
-                recent_item = random.choice(inventory_data)
+
+        for item in inventory_data:
+            ingredient, days_left = item['ingredient'], item['days_left']
+            shelf_life = item.get('shelf_life', 7)
+
+            if days_left <= self.settings.low_stock_threshold:
                 alerts.append(AlertItem(
-                    id=f"update_{recent_item['ingredient']}_{self.alert_counter}",
-                    type="success",
-                    title="Inventory Update",
-                    message=f"{recent_item['ingredient']} stock replenished",
-                    timestamp=self._get_relative_time(current_time, days_ago=1),
-                    commodity=recent_item['ingredient']
+                    id=f"stock_{ingredient}", type="critical", title="Critical Stock Alert",
+                    message=f"{ingredient} stock will run out in {days_left:.1f} days",
+                    timestamp="Now", commodity=ingredient
                 ))
-                self.alert_counter += 1
-            
-            # Add system notification
+            # Spoilage risk: more stock on hand than can be used before it goes off
+            elif days_left > shelf_life - self.settings.spoilage_warning:
+                alerts.append(AlertItem(
+                    id=f"spoilage_{ingredient}", type="warning", title="Spoilage Warning",
+                    message=f"{ingredient} stock lasts {days_left:.1f} days but keeps about {shelf_life}; use or sell the surplus first",
+                    timestamp="Now", commodity=ingredient
+                ))
+
+            # Price moves come from the forecast agent, for items whose model is already trained
+            if forecaster is not None and ingredient in forecaster.models:
+                forecast = forecaster_utils.predict_with_model(forecaster, ingredient, 7, None)
+                if 'error' not in forecast:
+                    latest = float(forecaster_utils.weekly_prices(forecaster.train_data, ingredient).iloc[-1])
+                    change = (forecast['predictions'][-1] / latest - 1) * 100
+                    if abs(change) >= self.settings.price_change_alert:
+                        rising = change > 0
+                        alerts.append(AlertItem(
+                            id=f"price_{ingredient}", type="warning" if rising else "info",
+                            title="Price Increase Warning" if rising else "Order Opportunity",
+                            message=f"{ingredient} prices forecast to {'rise' if rising else 'fall'} {abs(change):.1f}% over the next week",
+                            timestamp="Latest forecast", commodity=ingredient
+                        ))
+
+        if forecaster is not None and forecaster.train_data is not None:
+            latest_report = pd.to_datetime(forecaster.train_data['report_date']).max()
             alerts.append(AlertItem(
-                id=f"system_{self.alert_counter}",
-                type="system",
-                title="System Notification", 
-                message="New USDA price data imported",
-                timestamp=self._get_relative_time(current_time, days_ago=2),
-                commodity=None
+                id="system_data", type="system", title="Price Data",
+                message=f"Forecasts use USDA reports through {latest_report:%b %d, %Y}",
+                timestamp=f"{(datetime.now() - latest_report).days} days old", commodity=None
             ))
-            self.alert_counter += 1
-            
-            # Sort by most recent first and limit to 8 alerts
-            alerts.sort(key=lambda x: self._parse_timestamp(x.timestamp), reverse=True)
-            return alerts[:8]
-            
-        except Exception as e:
-            print(f"⚠️ Error generating alerts: {e}")
-            # Return fallback alerts
-            return [
-                AlertItem(
-                    id="fallback_1",
-                    type="system",
-                    title="System Status",
-                    message="Alert system is functioning normally",
-                    timestamp="5 minutes ago",
-                    commodity=None
-                )
-            ]
-    
-    def _get_relative_time(self, current_time: datetime, minutes_ago: int = 0, hours_ago: int = 0, days_ago: int = 0) -> str:
-        """Generate relative time strings"""
-        total_minutes = minutes_ago + (hours_ago * 60) + (days_ago * 24 * 60)
-        
-        if total_minutes < 60:
-            return f"{total_minutes} min ago"
-        elif total_minutes < 1440:  # less than 24 hours
-            hours = total_minutes // 60
-            return f"{hours} hour{'s' if hours != 1 else ''} ago"
-        else:
-            days = total_minutes // 1440
-            if days == 1:
-                return "Yesterday"
-            else:
-                return f"{days} days ago"
-                
-    def _parse_timestamp(self, timestamp: str) -> datetime:
-        """Parse relative timestamp for sorting"""
-        current_time = datetime.now()
-        
-        if "min ago" in timestamp:
-            minutes = int(timestamp.split()[0])
-            return current_time - timedelta(minutes=minutes)
-        elif "hour" in timestamp:
-            hours = int(timestamp.split()[0])
-            return current_time - timedelta(hours=hours)
-        elif "Yesterday" in timestamp:
-            return current_time - timedelta(days=1)
-        elif "days ago" in timestamp:
-            days = int(timestamp.split()[0])
-            return current_time - timedelta(days=days)
-        else:
-            return current_time
+
+        priority = {'critical': 0, 'warning': 1, 'info': 2, 'success': 3, 'system': 4}
+        alerts.sort(key=lambda a: priority.get(a.type, 5))
+        return alerts[:8]
 
 # Initialize alert manager
 alert_manager = AlertManager()
