@@ -1,0 +1,21 @@
+.git
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+
+# Local environments and secrets
+**/.venv
+backend/smartstock_env
+**/.env
+
+# Frontend build output and deps (rebuilt inside the image)
+smartstock-nextjs/node_modules
+smartstock-nextjs/.next
+smartstock-nextjs/out
+
+# Data the app doesn't read
+Example.csv
+Example_Train_backup_*.csv
+Test.html
+.vercel
+**/.env*.local

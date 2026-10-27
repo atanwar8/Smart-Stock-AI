@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
 import sys
+import os
+import shutil
 
 def run_data_processor():
     """Run the data processor script"""
@@ -61,16 +63,20 @@ def setup_chrome_driver():
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
-        from webdriver_manager.chrome import ChromeDriverManager
         
         chrome_options = Options()
-        # Don't use headless so we can see what's happening
+        # Visible browser locally; headless on servers (no display) or when HEADLESS=1
+        if os.getenv('HEADLESS') == '1' or (sys.platform.startswith('linux') and not os.getenv('DISPLAY')):
+            chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--window-size=1920,1080")
+        if os.getenv('CHROME_BIN'):
+            chrome_options.binary_location = os.getenv('CHROME_BIN')
         
-        # Use system ChromeDriver
-        service = Service('/opt/homebrew/bin/chromedriver')
+        # Use system ChromeDriver (Homebrew on macOS, chromium-driver in the Docker image)
+        driver_path = os.getenv('CHROMEDRIVER_PATH') or shutil.which('chromedriver') or '/opt/homebrew/bin/chromedriver'
+        service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
         

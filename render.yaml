@@ -1,0 +1,17 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Deploy from the README button, or Render Dashboard → New → Blueprint → this repo.
+services:
+  - type: web
+    name: smartstock-ai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free # sleeps after 15 idle minutes (~1 min to wake); "starter" stays awake
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: OPENWEATHER_API_KEY
+        sync: false # set in the dashboard; without it the app uses sample weather
+      - key: SEED_DEMO_INVENTORY
+        value: "1"
+      - key: PRETRAIN_MODELS
+        value: "1"

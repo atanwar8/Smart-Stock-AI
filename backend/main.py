@@ -7,6 +7,7 @@ Main application with prediction endpoints and inventory management
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import os
@@ -20,9 +21,17 @@ import subprocess
 import sys
 import asyncio
 import json
+import threading
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
+
+# Repo layout: CSVs live in the project root, the built frontend in smartstock-nextjs/out
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = Path(os.getenv('DATA_DIR', PROJECT_DIR))
+TRAIN_DATA_PATH = os.getenv('TRAIN_DATA_PATH', str(DATA_DIR / 'Example_Train.csv'))
+FRONTEND_DIR = Path(os.getenv('FRONTEND_DIR', PROJECT_DIR / 'smartstock-nextjs' / 'out'))
 
 # Import our forecaster
 from core.forecaster import XGBoostLightGBMForecaster
@@ -250,7 +259,7 @@ class InventoryManager:
     def _load_shelf_life_data(self) -> Dict[str, int]:
         """Load shelf life data from ingredient_storage_data.csv"""
         try:
-            df = pd.read_csv('../ingredient_storage_data.csv')
+            df = pd.read_csv(DATA_DIR / 'ingredient_storage_data.csv')
             shelf_life_map = {}
             
             for _, row in df.iterrows():
@@ -433,10 +442,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS for frontend integration
+# Configure CORS for frontend integration (comma-separated list, e.g. a separately hosted frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Next.js dev server
+    allow_origins=os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(','),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -490,9 +499,7 @@ async def startup_event():
     """Initialize the forecaster on startup"""
     global forecaster
     
-    # Get paths from environment or use defaults
-    train_path = os.getenv('TRAIN_DATA_PATH', '/Users/aryantanwar/Desktop/SmartStock_AI/Example_Train.csv')
-    test_path = os.getenv('TEST_DATA_PATH', '/Users/aryantanwar/Desktop/SmartStock_AI/Example_Test.csv')
+    train_path = TRAIN_DATA_PATH
     weather_api_key = os.getenv('OPENWEATHER_API_KEY')
     
     # Initialize forecaster
@@ -503,10 +510,30 @@ async def startup_event():
     success = forecaster.load_training_data(train_path)
     if not success:
         print("⚠️ Warning: Could not load training data")
+
+    # A fresh deploy starts with an empty walk-in; give the demo a few tracked items
+    if os.getenv('SEED_DEMO_INVENTORY', '1') == '1' and not inventory_manager.inventory_items:
+        for ingredient, stock, usage, capacity in [
+            ('Tomatoes', 22, 9, 120), ('Lettuce', 30, 7, 80), ('Carrots', 140, 10, 200), ('Broccoli', 36, 4, 90)
+        ]:
+            inventory_manager.update_inventory(ingredient, stock, usage, capacity)
+
+    # Train every commodity's model in the background so the first page views are fast
+    if success and os.getenv('PRETRAIN_MODELS', '1') == '1':
+        def pretrain():
+            weather_data = forecaster.get_weather_data('CA', '90210', 30)
+            for commodity in list(forecaster.viable_commodities):
+                if commodity not in forecaster.models:
+                    try:
+                        forecaster_utils.train_model(forecaster, commodity, weather_data)
+                    except Exception as e:
+                        print(f"⚠️ Pretraining {commodity} failed: {e}")
+            print(f"🎯 Pretrained {len(forecaster.models)} models")
+        threading.Thread(target=pretrain, daemon=True).start()
     
     print("🚀 SmartStock AI API started successfully!")
 
-@app.get("/")
+@app.get("/info")
 async def root():
     """Root endpoint with API information"""
     return {
@@ -530,8 +557,17 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "forecaster_ready": forecaster is not None,
         "models_trained": len(forecaster.models) if forecaster else 0,
-        "viable_commodities": len(forecaster.viable_commodities) if forecaster else 0
+        "viable_commodities": len(forecaster.viable_commodities) if forecaster else 0,
+        "training_rows": int(len(forecaster.train_data)) if forecaster is not None and forecaster.train_data is not None else 0,
+        "latest_data_date": _latest_report_date()
     }
+
+def _latest_report_date() -> Optional[str]:
+    """Newest USDA report date in the training data, as YYYY-MM-DD"""
+    try:
+        return pd.to_datetime(forecaster.train_data['report_date']).max().date().isoformat()
+    except Exception:
+        return None
 
 @app.get("/commodities")
 async def get_commodities():
@@ -1890,11 +1926,13 @@ async def run_scraper_and_train():
         print("🕷️ Starting automated scraper...")
         
         # Run the automated scraper
-        scraper_process = subprocess.Popen([
-            sys.executable, "/Users/aryantanwar/Desktop/SmartStock_AI/automated_scraper.py"
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd="/Users/aryantanwar/Desktop/SmartStock_AI")
-        
-        scraper_stdout, scraper_stderr = scraper_process.communicate()
+        # Run in a worker thread so the event loop keeps serving other requests while Chrome scrapes
+        scraper_process = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(PROJECT_DIR / "automated_scraper.py")],
+            capture_output=True, text=True, cwd=str(DATA_DIR)
+        )
+        scraper_stderr = scraper_process.stderr
         
         if scraper_process.returncode != 0:
             print(f"❌ Scraper failed: {scraper_stderr}")
@@ -1912,7 +1950,7 @@ async def run_scraper_and_train():
         print("🔄 Reloading data and retraining models...")
         
         # Reload the training data in the forecaster
-        forecaster.load_training_data("/Users/aryantanwar/Desktop/SmartStock_AI/Example_Train.csv")
+        forecaster.load_training_data(TRAIN_DATA_PATH)
         
         # Get the available commodities
         viable_commodities = forecaster.viable_commodities
@@ -1983,6 +2021,25 @@ async def scrape_and_train():
         }
 
 
+# ==================== SINGLE-ORIGIN DEPLOY ====================
+
+class StripApiPrefix:
+    """Serve every API route under /api too, so the bundled frontend can call /api/... on the same origin"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/api/"):
+            scope = dict(scope, path=scope["path"][4:])
+        await self.app(scope, receive, send)
+
+app.add_middleware(StripApiPrefix)
+
+# The built Next.js export (if present) is served at "/" after all API routes
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+    print(f"🖥️ Serving frontend from {FRONTEND_DIR}")
 
 if __name__ == "__main__":
     import uvicorn

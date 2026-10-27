@@ -16,3 +16,9 @@ node_modules/
 
 # OS
 .DS_Store
+
+# Static dashboard build (served by FastAPI)
+out/
+.vercel
+.env*
+!.env.template
