@@ -15,7 +15,7 @@ Produce price forecasting and smart ordering for restaurants. SmartStock learns 
 | **Smart ordering** | Log stock and daily use; get a recommended order quantity and cost, plus the cheapest day to buy over the next week. |
 | **Predictions** | 7, 14 or 30-day outlook with low and high cases, a month-by-year seasonality heatmap, and measured price volatility. |
 | **Alerts** | Running-out, spoilage and forecast price-move alerts, with editable thresholds and channels. |
-| **Data refresh** | Pull the latest USDA reports and retrain every model in one click. |
+| **Data refresh** | Pull every new weekly USDA report through USDA's API and retrain every model in one click. |
 
 ## How it works
 
@@ -23,18 +23,17 @@ Three agents run the pipeline, and the dashboard sits on top:
 
 ```mermaid
 flowchart LR
-    USDA[USDA Market News] -->|Selenium + headless Chrome| S[Scraper agent<br/>automated_scraper.py]
-    S -->|new weekly rows| D[Data agent<br/>data_processor.py]
-    D -->|clean, de-duplicate, append| CSV[(Example_Train.csv)]
-    CSV --> F[Forecast agent<br/>backend/core]
-    F -->|forecasts, skill scores| API[FastAPI<br/>backend/main.py]
-    INV[Stock you log] --> API
-    API -->|orders, alerts| UI[Dashboard<br/>smartstock-nextjs]
+    USDA[USDA MyMarketNews API<br/>report 3324] -->|new weekly reports| D[Data agent<br/>backend/core/usda_api.py]
+    D -->|map, de-duplicate, append| CSV[(Example_Train.csv)]
+    CSV --> F[Forecast agent<br/>backend/core/forecaster_utils.py]
+    F -->|forecasts, skill scores| O[Ordering and alerts agent<br/>backend/main.py]
+    INV[Stock you log] --> O
+    O -->|orders, alerts| UI[Dashboard<br/>smartstock-nextjs]
 ```
 
-- **Scraper agent** (`automated_scraper.py`) opens USDA Market News in Chrome, requests every report newer than the latest date in the training data, and saves them.
-- **Data agent** (`data_processor.py`) cleans the export, appends it to `Example_Train.csv`, and drops duplicates, keeping the freshest copy of a re-scraped row.
-- **Forecast agent** (`backend/core/forecaster_utils.py`) turns each vegetable's rows into one weekly price series in its usual unit (per lb, each, per bunch...). It trains a LightGBM model on past weeks only, then forecasts week by week from the latest real price. The order recommendations and alerts in `backend/main.py` are built on these forecasts.
+- **Data agent** (`backend/core/usda_api.py`) asks USDA's MyMarketNews API for every weekly National Retail Report (report 3324) since the newest week in `Example_Train.csv`, maps the rows to the training columns, and appends them. It re-requests the newest stored week, so corrections USDA publishes replace the old rows.
+- **Forecast agent** (`backend/core/forecaster_utils.py`) turns each vegetable's rows into one weekly price series in its usual unit (per lb, each, per bunch...). It trains a LightGBM model on past weeks only, then forecasts week by week from the latest real price.
+- **Ordering and alerts agent** (`backend/main.py`) combines the stock you log, each item's shelf life and the forecasts into order recommendations and running-out, spoilage and price-move alerts.
 
 ### How good are the forecasts?
 
@@ -65,6 +64,7 @@ Copy `backend/.env.template` to `backend/.env` for local runs, or set these in t
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `MARS_API_KEY` | none | Free USDA MyMarketNews API key ([sign up](https://mymarketnews.ams.usda.gov), then My Profile, API Key). **Data refresh** needs it. |
 | `OPENWEATHER_API_KEY` | none | Live weather. Without it the app uses sample weather data. |
 | `SEED_DEMO_INVENTORY` | `1` | Starts with four tracked items so the dashboard isn't empty. Set `0` to start blank. |
 | `PRETRAIN_MODELS` | `1` | Trains every vegetable's model in the background at startup. |
@@ -84,7 +84,7 @@ cd smartstock-nextjs && npm run lint && npx tsc --noEmit && npm run build
 
 GitHub Actions (`.github/workflows/ci.yml`) runs all of this on every push and pull request, plus `npm audit` and a Docker build. Dependabot opens one pull request per outdated dependency each week, and CI checks each one.
 
-The backend tests cover the forecast agent (one point per week in one unit, no look-ahead, honest scores on unpredictable prices, forecasts that start from the latest price) and the API (both URL prefixes, predictions, the trend chart, inventory, alert rules, units).
+The backend tests cover the data agent (request format, field mapping, paging, appending without duplicates), the forecast agent (one point per week in one unit, no look-ahead, honest scores on unpredictable prices, forecasts that start from the latest price) and the API (both URL prefixes, predictions, the trend chart, inventory, alert rules, units).
 
 ## Project layout
 
@@ -94,10 +94,9 @@ smartstock-nextjs/     Dashboard: Next.js static export, Tailwind, Plotly charts
   src/lib/             API client, types, navigation, backend health hook
 backend/
   main.py              API routes, inventory, alerts, serves the built dashboard
+  core/usda_api.py     Data agent (USDA MyMarketNews API client)
   core/                Forecast agent (weekly series, features, training, prediction, weather)
   tests/               pytest suite
-automated_scraper.py   Scraper agent
-data_processor.py      Data agent
 Example_Train.csv      Weekly USDA retail prices, 2010 to the latest scrape
 docs/decisions/        Architecture decision records
 Dockerfile             Builds the dashboard, then runs API + dashboard in one image
@@ -109,10 +108,10 @@ start.sh               One-command local run
 
 - Inventory, alert settings and trained models live in memory, so they reset on restart or redeploy.
 - The free Render plan sleeps after 15 idle minutes and takes about a minute to wake.
-- **Data refresh** starts Chromium, which needs more than the free plan's 512 MB. Use a bigger instance or run the scraper locally. Only one refresh runs at a time.
+- **Data refresh** needs `MARS_API_KEY`; without it the button is disabled and the page says how to get one. Only one refresh runs at a time.
 - Order recommendations count stock in pounds, but some vegetables are priced per head or per bunch, so order cost for those is approximate.
 - The dashboard's cost-savings KPI from the original backend is a placeholder and isn't shown.
-- `Latest_App_Streamlit.py`, `train_test_updater.py` and `backend/start_backend.py` are from the original Streamlit version and aren't used by the dashboard.
+- `Latest_App_Streamlit.py`, `train_test_updater.py` and `backend/start_backend.py` are from the original Streamlit version and aren't used by the dashboard. The original Selenium scraper was replaced by the USDA API client ([ADR-003](docs/decisions/ADR-003-usda-api-instead-of-browser-scraping.md)).
 
 ## Author
 
