@@ -11,14 +11,11 @@ RUN npm run build
 # 2) FastAPI backend, which also serves the built dashboard at "/"
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    CHROME_BIN=/usr/bin/chromium \
-    CHROMEDRIVER_PATH=/usr/bin/chromedriver \
-    HEADLESS=1
+    PYTHONUNBUFFERED=1
 
-# libgomp1: LightGBM/XGBoost runtime. chromium + driver: the "Data refresh" USDA scraper.
+# libgomp1: LightGBM/XGBoost runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 chromium chromium-driver \
+    && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

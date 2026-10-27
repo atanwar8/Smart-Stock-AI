@@ -16,8 +16,6 @@ import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
 import uuid
-import subprocess
-import sys
 import asyncio
 import json
 import threading
@@ -34,7 +32,8 @@ FRONTEND_DIR = Path(os.getenv('FRONTEND_DIR', PROJECT_DIR / 'smartstock-nextjs' 
 
 # Import our forecaster
 from core.forecaster import XGBoostLightGBMForecaster
-from core import forecaster_utils
+from core import forecaster_utils, usda_api
+import requests
 
 # Inventory Management Data Models
 class InventoryItem(BaseModel):
@@ -470,7 +469,8 @@ async def health_check():
         "models_trained": len(forecaster.models) if forecaster else 0,
         "viable_commodities": len(forecaster.viable_commodities) if forecaster else 0,
         "training_rows": int(len(forecaster.train_data)) if forecaster is not None and forecaster.train_data is not None else 0,
-        "latest_data_date": _latest_report_date()
+        "latest_data_date": _latest_report_date(),
+        "usda_api_configured": bool(os.getenv('MARS_API_KEY'))
     }
 
 def _latest_report_date() -> Optional[str]:
@@ -1737,80 +1737,45 @@ async def get_recent_alerts():
 
 # ==================== SCRAPE AND TRAIN ENDPOINT ====================
 
-async def run_scraper_and_train():
-    """Run the automated scraper and then retrain models with new data"""
+async def refresh_and_retrain():
+    """Pull new weekly USDA reports through the MyMarketNews API, then retrain every model"""
     try:
-        print("🕷️ Starting automated scraper...")
-        
-        # Run the automated scraper
-        # Run in a worker thread so the event loop keeps serving other requests while Chrome scrapes
-        scraper_process = await asyncio.to_thread(
-            subprocess.run,
-            [sys.executable, str(PROJECT_DIR / "automated_scraper.py")],
-            capture_output=True, text=True, cwd=str(DATA_DIR)
+        print("🌽 Requesting new weekly reports from the USDA MyMarketNews API...")
+        result = await asyncio.to_thread(
+            usda_api.refresh_training_data, TRAIN_DATA_PATH, forecaster.viable_commodities
         )
-        scraper_stderr = scraper_process.stderr
-        
-        if scraper_process.returncode != 0:
-            print(f"❌ Scraper failed: {scraper_stderr}")
-            return False, f"Scraper failed: {scraper_stderr}"
-        
-        print("✅ Scraper finished, reloading the training data...")
+    except usda_api.MissingApiKey:
+        return False, ("Data refresh needs a free USDA MyMarketNews API key. Create one at mymarketnews.ams.usda.gov "
+                       "(My Profile, API Key) and set it as MARS_API_KEY in the service's environment.")
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code in (401, 403):
+            return False, "USDA rejected the API key. Check that MARS_API_KEY matches the key in your MyMarketNews profile."
+        return False, f"USDA's API returned an error: {e}"
+    except requests.RequestException as e:
+        return False, f"Couldn't reach USDA's API: {e}"
 
-        # The scraper runs data_processor.py itself, which appends to Example_Train.csv.
-        # Exit code 0 doesn't mean it found anything, so compare the data before and after.
-        rows_before = len(forecaster.train_data) if forecaster.train_data is not None else 0
-        forecaster.load_training_data(TRAIN_DATA_PATH)
-        rows_added = len(forecaster.train_data) - rows_before
-        latest = _latest_report_date()
-        if rows_added <= 0:
-            output = (scraper_process.stdout or '').strip().splitlines()[-5:] + (scraper_stderr or '').strip().splitlines()[-5:]
-            print("⚠️ Scraper added no rows. Last output:\n" + "\n".join(output))
-            return False, (
-                f"The scraper finished but added no new rows; the newest report is still {latest}. "
-                "USDA Market News may have changed its pages. The service logs show the scraper's output."
-            )
-        print(f"✅ Added {rows_added} rows (newest report {latest}). Retraining models...")
-        
-        # Get the available commodities
-        viable_commodities = forecaster.viable_commodities
-        print(f"📊 Found {len(viable_commodities)} commodities to retrain")
-        
-        # Retrain all models
-        retrained_count = 0
-        for commodity in viable_commodities:
-            try:
-                print(f"🤖 Retraining model for {commodity}...")
-                
-                # Get weather data for training
-                weather_data = forecaster.get_weather_data("CA", "10001", 7)
-                
-                # Import forecaster_utils to use training functions
-                from core import forecaster_utils
-                
-                # Train the model
-                forecaster_utils.train_model(forecaster, commodity, weather_data)
-                retrained_count += 1
-                print(f"✅ Successfully retrained {commodity} model")
-                
-            except Exception as e:
-                print(f"⚠️ Failed to retrain {commodity}: {e}")
-                continue
-        
-        print(f"🎯 Retraining complete! Successfully retrained {retrained_count}/{len(viable_commodities)} models")
-        
-        # Update KPI metrics with new model performance
-        print("📊 Updating KPI metrics...")
-        
-        return True, f"Added {rows_added} new rows (newest report {latest}) and retrained {retrained_count} models"
-        
-    except Exception as e:
-        print(f"❌ Error in scrape and train process: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, str(e)
+    latest, added, empty = result['latest'], result['rows_added'], result['empty_commodities']
+    missing = f" No rows came back for {', '.join(empty)}." if empty else ""
+    print(f"📥 USDA refresh: {added} new rows, newest report {latest}.{missing}")
 
-# One refresh at a time: each run starts Chrome and retrains every model
+    if added <= 0:
+        days_old = (datetime.now().date() - datetime.fromisoformat(latest).date()).days
+        if days_old <= 10:
+            return True, f"Already up to date: the newest report is from {latest}.{missing}"
+        return False, f"USDA returned no new rows; the newest report is still {latest}.{missing}"
+
+    forecaster.load_training_data(TRAIN_DATA_PATH)
+    retrained = 0
+    for commodity in forecaster.viable_commodities:
+        try:
+            forecaster_utils.train_model(forecaster, commodity)
+            retrained += 1
+        except Exception as e:
+            print(f"⚠️ Failed to retrain {commodity}: {e}")
+    print(f"🎯 Retrained {retrained}/{len(forecaster.viable_commodities)} models")
+    return True, f"Added {added} new rows through {latest} and retrained {retrained} models.{missing}"
+
+# One refresh at a time: each run calls USDA for every commodity and retrains every model
 scrape_lock = asyncio.Lock()
 
 @app.post("/scrape-and-train")
@@ -1826,7 +1791,7 @@ async def _scrape_and_train():
         print("\n🚀 === STARTING SCRAPE AND TRAIN PROCESS ===")
         
         # Run the scraper and training process
-        success, message = await run_scraper_and_train()
+        success, message = await refresh_and_retrain()
         
         if success:
             return {

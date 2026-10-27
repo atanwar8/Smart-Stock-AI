@@ -70,12 +70,25 @@ def test_commodities_report_the_unit_prices_are_quoted_in(client):
     assert units["Lettuce"] == "each"
 
 
-def test_refresh_that_adds_no_rows_is_reported_honestly(client, monkeypatch):
-    # The scraper "succeeds" (exit 0) without writing anything, as it did against today's USDA site
-    finished = type("Finished", (), {"returncode": 0, "stdout": "no reports found", "stderr": ""})()
-    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: finished)
-
+def test_refresh_without_an_api_key_explains_how_to_get_one(client, monkeypatch):
+    monkeypatch.delenv("MARS_API_KEY", raising=False)
     body = client.post("/api/scrape-and-train").json()
-
     assert body["success"] is False
-    assert "no new rows" in body["error"]
+    assert "MARS_API_KEY" in body["error"]
+
+
+def test_refresh_that_adds_no_rows_is_reported_honestly(client, monkeypatch):
+    monkeypatch.setattr(main.usda_api, "refresh_training_data",
+                        lambda *a, **k: {"rows_added": 0, "latest": "2025-07-25", "empty_commodities": ["Lettuce"]})
+    body = client.post("/api/scrape-and-train").json()
+    assert body["success"] is False
+    assert "no new rows" in body["error"] and "Lettuce" in body["error"]
+
+
+def test_refresh_that_adds_rows_retrains_the_models(client, monkeypatch):
+    monkeypatch.setattr(main.usda_api, "refresh_training_data",
+                        lambda *a, **k: {"rows_added": 42, "latest": "2026-10-23", "empty_commodities": []})
+    body = client.post("/api/scrape-and-train").json()
+    assert body["success"] is True
+    assert "Added 42 new rows through 2026-10-23" in body["message"]
+    assert client.get("/api/health").json()["models_trained"] == 10
