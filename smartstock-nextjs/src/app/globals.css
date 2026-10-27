@@ -1,26 +1,99 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@theme {
+  /* Surfaces */
+  --color-canvas: #eceee9;
+  --color-surface: #fbfcfa;
+  --color-surface-2: #f3f5f1;
+  --color-well: rgb(20 34 30 / 0.055);
+  --color-line: rgb(20 34 30 / 0.1);
+  --color-line-2: rgb(20 34 30 / 0.18);
+
+  /* Content */
+  --color-ink: #121a17;
+  --color-muted: #56615c; /* 6.2:1 on surface */
+  --color-faint: #67716c; /* 4.9:1 on surface */
+
+  /* Sidebar */
+  --color-side: #10201c;
+  --color-side-ink: #e3eeea;
+  --color-harvest: #e8b54d; /* active nav pill */
+  --color-harvest-ink: #241803;
+
+  /* Accent: primary actions and actual prices; brass marks anything forecast */
+  --color-primary: #0b6b5f;
+  --color-primary-hover: #08584e;
+  --color-on-primary: #effcf8;
+  --color-brass: #c3922e;
+
+  /* Signals */
+  --color-good: #1a6e3c;
+  --color-bad: #ab311f;
+  --color-warn: #9a5f00;
+  --color-info: #2a5fc4;
+
+  --radius-card: 22px;
+  --radius-tile: 14px;
+
+  --shadow-card: 0 1px 2px rgb(20 34 30 / 0.05), 0 14px 32px -22px rgb(20 34 30 / 0.28);
+  --shadow-pop: 0 26px 60px -18px rgb(14 26 23 / 0.34), 0 2px 6px rgb(14 26 23 / 0.08);
+  --shadow-side: 0 30px 60px -30px rgb(8 20 17 / 0.55);
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-canvas);
+  background-image:
+    radial-gradient(900px 420px at 12% -8%, #d9ebe5 0%, transparent 60%),
+    radial-gradient(800px 380px at 92% -10%, #efe6d2 0%, transparent 60%);
+  background-repeat: no-repeat;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One orchestrated moment: the page body rises in when you switch sections */
+.page-enter {
+  animation: page-enter 0.4s var(--ease-out-soft);
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Number inputs without spinners, matching the rest of the form controls */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

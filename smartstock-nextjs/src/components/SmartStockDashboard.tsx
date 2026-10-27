@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { PlugZap } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import DashboardTab from './DashboardTab';
@@ -9,107 +10,91 @@ import PredictionsTab from './PredictionsTab';
 import AlertsTab from './AlertsTab';
 import ScrapeTab from './ScrapeTab';
 import { CommodityProvider } from '../contexts/CommodityContext';
+import { useApi } from '@/lib/api';
+import { TabId, isTabId, TABS } from '@/lib/tabs';
+import type { AlertItem, InventoryRow } from '@/lib/types';
+import { useBackendStatus } from '@/lib/useBackendStatus';
+
+const tabFromHash = (): TabId => {
+  const id = window.location.hash.replace(/^#\/?/, '');
+  return isTabId(id) ? id : 'overview';
+};
 
 export default function SmartStockDashboard() {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const status = useBackendStatus();
 
-  const toggleSidebar = () => {
-    setSidebarCollapsed(!sidebarCollapsed);
-  };
+  // Sidebar badges: alerts waiting, and stock that needs ordering
+  const alerts = useApi<{ alerts: AlertItem[] }>('/alerts/recent');
+  const inventory = useApi<{ inventory: InventoryRow[] }>('/inventory/list');
+  const { reload: reloadAlerts } = alerts;
+  const { reload: reloadInventory } = inventory;
 
-  const handleTabChange = (tabId: string) => {
-    setActiveTab(tabId);
-  };
-
+  // The URL hash is the source of truth for the section, so sections can be linked and survive a reload
   useEffect(() => {
-    // Load Font Awesome CSS
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
-    document.head.appendChild(link);
-
-    return () => {
-      if (document.head.contains(link)) {
-        document.head.removeChild(link);
-      }
+    const sync = () => {
+      setActiveTab(tabFromHash());
+      setMobileOpen(false);
     };
+    sync();
+    window.addEventListener('hashchange', sync);
+    return () => window.removeEventListener('hashchange', sync);
   }, []);
 
-  const getTabTitle = () => {
-    switch (activeTab) {
-      case 'dashboard': return 'Dashboard';
-      case 'ordering': return 'Smart Ordering';
-      case 'predictions': return 'Predictions';
-      case 'alerts': return 'Alerts';
-      case 'scrape': return 'Scrape Now';
-      default: return 'Dashboard';
-    }
-  };
+  useEffect(() => {
+    const label = TABS.find((t) => t.id === activeTab)?.label;
+    document.title = `${label} · SmartStock AI`;
+    window.scrollTo({ top: 0 });
+    reloadAlerts();
+    reloadInventory();
+  }, [activeTab, reloadAlerts, reloadInventory]);
+
+  const urgentAlerts = alerts.data?.alerts.filter((a) => a.type === 'critical' || a.type === 'warning').length ?? 0;
+  const lowStock = inventory.data?.inventory.filter((i) => i.status_color === 'red' || i.status_color === 'yellow').length ?? 0;
 
   return (
     <CommodityProvider>
-      <div className="bg-gray-50">
-      <style jsx global>{`
-        .sidebar {
-          transition: all 0.3s;
-        }
-        .sidebar.collapsed {
-          width: 70px;
-        }
-        .sidebar.collapsed .nav-text {
-          display: none;
-        }
-        .main-content {
-          transition: margin-left 0.3s;
-        }
-        .card-hover:hover {
-          transform: translateY(-5px);
-          box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-        }
-        .alert-pulse {
-          animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-          0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
-          70% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
-        }
-        .smooth-transition {
-          transition: all 0.3s ease;
-        }
-        .tab-content {
-          display: none;
-        }
-        .tab-content.active {
-          display: block;
-          animation: fadeIn 0.5s;
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-      `}</style>
-
-      <div className="flex h-screen overflow-hidden">
-        <Sidebar 
+      <div className="flex min-h-dvh gap-3 lg:gap-6 lg:p-3">
+        <Sidebar
           activeTab={activeTab}
-          sidebarCollapsed={sidebarCollapsed}
-          onTabChange={handleTabChange}
-          onToggleSidebar={toggleSidebar}
+          collapsed={collapsed}
+          mobileOpen={mobileOpen}
+          status={status}
+          badges={{
+            ordering: { count: lowStock, tone: 'notice' },
+            alerts: { count: urgentAlerts, tone: 'alert' },
+          }}
+          onTabChange={(id) => (window.location.hash = `/${id}`)}
+          onToggleCollapsed={() => setCollapsed(!collapsed)}
+          onCloseMobile={() => setMobileOpen(false)}
         />
 
-        <div className="main-content flex-1 overflow-y-auto">
-          <Header title={getTabTitle()} />
-          
-          {activeTab === 'dashboard' && <DashboardTab />}
-          {activeTab === 'ordering' && <OrderingTab />}
-          {activeTab === 'predictions' && <PredictionsTab />}
-          {activeTab === 'alerts' && <AlertsTab />}
-          {activeTab === 'scrape' && <ScrapeTab />}
-        </div>
+        <main className="min-w-0 flex-1 px-4 pb-10 sm:px-6 lg:px-2 lg:pr-4">
+          <div className="mx-auto max-w-[1360px]">
+            <Header status={status} onOpenMenu={() => setMobileOpen(true)} />
+
+            {status.state === 'offline' && (
+              <div className="mb-5 flex items-start gap-3 rounded-[16px] border border-[#d99a1e]/30 bg-[#d99a1e]/10 px-4 py-3 text-[13.5px] text-warn">
+                <PlugZap className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  <b className="font-semibold">The forecasting API isn&apos;t answering.</b> Numbers below may be missing until it&apos;s back. Running locally? Start
+                  everything with <code className="rounded bg-white/60 px-1">./start.sh</code>.
+                </p>
+              </div>
+            )}
+
+            <div key={activeTab} className="page-enter">
+              {activeTab === 'overview' && <DashboardTab />}
+              {activeTab === 'ordering' && <OrderingTab onInventoryChange={reloadInventory} />}
+              {activeTab === 'predictions' && <PredictionsTab />}
+              {activeTab === 'alerts' && <AlertsTab />}
+              {activeTab === 'refresh' && <ScrapeTab health={status.health} />}
+            </div>
+          </div>
+        </main>
       </div>
-    </div>
     </CommodityProvider>
   );
 }

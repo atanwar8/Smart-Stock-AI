@@ -1,634 +1,469 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useMemo } from 'react';
+import { ArrowUpRight, CheckCircle2, Cloud, CloudFog, CloudRain, Droplets, PackageOpen, Snowflake, Sun } from 'lucide-react';
 import { useCommodity } from '../contexts/CommodityContext';
+import { qs, useApi } from '@/lib/api';
+import { goToTab } from '@/lib/tabs';
+import type { InventoryRow, Kpis, SevenDay, TrendChart, Volatility, Weather } from '@/lib/types';
+import Chart, { CHART } from './Chart';
+import { Button, Card, CardHeader, Delta, Empty, Meter, PageHeader, Pill, ProduceTile, Select, Skeleton, money, statusLabel, statusTone, cx } from './ui';
 
-// Dynamically import Plotly to avoid SSR issues
-const Plot = dynamic(() => import('react-plotly.js'), { ssr: false });
+const greeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+};
 
-interface KPIData {
-  inventory_value: { value: string; change: string; trend: string };
-  waste_reduction: { value: string; change: string; trend: string };
-  monthly_savings: { value: string; change: string; trend: string };
-  forecast_accuracy: { value: string; change: string; trend: string };
-}
+const pct = (from: number, to: number) => (from ? ((to - from) / from) * 100 : 0);
+const num = (s: string) => parseFloat(s) || 0;
+const shortDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-interface ChartData {
-  data: Array<{
-    x: string[];
-    y: number[];
-    type: string;
-    mode?: string;
-    name: string;
-    line?: { color: string; width: number; dash?: string };
-    marker?: { size: number };
-    fillcolor?: string;
-    fill?: string;
-  }>;
-  layout: {
-    title: string;
-    xaxis: { title: string };
-    yaxis: { title: string };
-    showlegend: boolean;
-    legend?: { orientation: string; y: number };
-    margin: { t: number };
-    plot_bgcolor: string;
-    paper_bgcolor: string;
-  };
-  config: { displayModeBar: boolean };
-}
+export const weatherIcon = (condition = '') => {
+  const c = condition.toLowerCase();
+  if (c.includes('rain') || c.includes('storm') || c.includes('drizzle')) return CloudRain;
+  if (c.includes('snow')) return Snowflake;
+  if (c.includes('fog') || c.includes('mist') || c.includes('haze')) return CloudFog;
+  if (c.includes('cloud')) return Cloud;
+  return Sun;
+};
 
 export default function DashboardTab() {
-  const { selectedCommodity, setSelectedCommodity, selectedState, setSelectedState, selectedZipCode, setSelectedZipCode } = useCommodity();
-  const [commodities, setCommodities] = useState<string[]>([]);
-  const [kpiData, setKpiData] = useState<KPIData | null>(null);
-  const [chartData, setChartData] = useState<ChartData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [weatherData, setWeatherData] = useState<any>(null);
-  const [inventoryData, setInventoryData] = useState<any[]>([]);
-  const [inventoryAlerts, setInventoryAlerts] = useState<any[]>([]);
-  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const { commodities, selectedCommodity, setSelectedCommodity, selectedState, selectedZipCode, priceUnit } = useCommodity();
+  const unit = priceUnit(selectedCommodity);
+  const place = qs({ state: selectedState, zip_code: selectedZipCode });
 
-  const fetchChartData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      console.log('Fetching chart data for:', { selectedCommodity, selectedState, selectedZipCode });
-      const response = await fetch(`http://localhost:8000/30-day-trends?commodity=${encodeURIComponent(selectedCommodity)}&state=${selectedState}&zip_code=${selectedZipCode}`);
-      console.log('Fetching chart data from:', `http://localhost:8000/30-day-trends?commodity=${encodeURIComponent(selectedCommodity)}&state=${selectedState}&zip_code=${selectedZipCode}`);
-      
-      console.log('Chart data response status:', response.status);
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Chart data received:', data);
-        setChartData(data);
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-    } catch (err) {
-      console.error('Failed to fetch chart data:', err);
-      setError('Failed to load chart data. Using fallback data.');
-      // Fallback to mock data
-      setChartData({
-        data: mockPriceData,
-        layout: mockPriceLayout,
-        config: {displayModeBar: false}
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedCommodity, selectedState, selectedZipCode]);
+  const trends = useApi<TrendChart>(`/30-day-trends?${qs({ commodity: selectedCommodity })}&${place}`);
+  const week = useApi<SevenDay>(`/7-day-prediction?${qs({ commodity: selectedCommodity })}&${place}`);
+  const volatility = useApi<Volatility>(`/market-volatility?${qs({ commodity: selectedCommodity })}`);
+  const kpis = useApi<Kpis>('/dashboard/kpi');
+  const inventory = useApi<{ inventory: InventoryRow[] }>('/inventory/list');
+  const weather = useApi<Weather>(`/weather?${place}&days=7`);
 
-  // Fetch inventory data
-  const fetchInventoryData = useCallback(async () => {
-    setInventoryLoading(true);
-    try {
-      // Fetch inventory list
-      const inventoryResponse = await fetch('http://localhost:8000/inventory/list');
-      if (inventoryResponse.ok) {
-        const inventoryData = await inventoryResponse.json();
-        setInventoryData(inventoryData.inventory || []);
-      }
-
-      // Fetch inventory alerts
-      const alertsResponse = await fetch('http://localhost:8000/dashboard/inventory-status');
-      if (alertsResponse.ok) {
-        const alertsData = await alertsResponse.json();
-        setInventoryAlerts(alertsData.alerts || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch inventory data:', err);
-      // Use fallback data if fetch fails
-      setInventoryAlerts([
-        {
-          commodity: "Tomatoes",
-          status: "critical",
-          days_left: 2,
-          message: "Stock will run out in 2 days",
-          icon: "exclamation-circle",
-          color: "red"
-        }
-      ]);
-    } finally {
-      setInventoryLoading(false);
-    }
-  }, []);
-
-  // Fetch available commodities on component mount
+  // Opening a commodity trains its model on first use, so refresh accuracy once its trend arrives
+  const { reload: reloadKpis } = kpis;
   useEffect(() => {
-    fetchCommodities();
-    fetchKPIData();
-    fetchInventoryData();
-  }, [fetchInventoryData]);
+    if (trends.data) reloadKpis();
+  }, [trends.data, reloadKpis]);
 
-  // Fetch chart data when commodity, state, or zip changes
-  useEffect(() => {
-    if (selectedCommodity && selectedState && selectedZipCode) {
-      fetchChartData();
-    }
-  }, [selectedCommodity, selectedState, selectedZipCode, fetchChartData]);
+  const series = useMemo(() => {
+    const byName = (name: string) => trends.data?.data.find((t) => t.name === name);
+    return { actual: byName('Actual Price'), forecast: byName('Forecast'), upper: byName('Upper Bound'), lower: byName('Lower Bound') };
+  }, [trends.data]);
 
-  // Refresh inventory data every 30 seconds or when tab is focused
-  useEffect(() => {
-    const interval = setInterval(fetchInventoryData, 30000); // Refresh every 30 seconds
-    
-    const handleFocus = () => {
-      fetchInventoryData(); // Refresh when tab gains focus
-    };
-    
-    window.addEventListener('focus', handleFocus);
-    
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [fetchInventoryData]);
+  const actualY = series.actual?.y ?? [];
+  const current = actualY.at(-1);
+  const lastWeek = actualY.at(-2);
+  const lastDate = series.actual?.x.at(-1);
+  const weekPrices = week.data?.predictions.map((p) => p.price) ?? [];
+  const weekEnd = weekPrices.at(-1);
+  // Compare the forecast with the latest real price, not with the model's own first day
+  const weekChange = weekEnd !== undefined && current !== undefined ? pct(current, weekEnd) : undefined;
 
-  const fetchCommodities = async () => {
-    try {
-      console.log('Fetching commodities from backend...');
-      const response = await fetch('http://localhost:8000/commodities');
-      console.log('Commodities response status:', response.status);
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Commodities data received:', data);
-        setCommodities(data.viable_commodities || []);
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-    } catch (err) {
-      console.error('Failed to fetch commodities:', err);
-      // Fallback to default commodities
-      const availableCommodities = ['Tomatoes', 'Lettuce', 'Onions', 'Potatoes', 'Carrots', 'Bell Peppers'];
-      setCommodities(availableCommodities);
-    }
+  const details = kpis.data?.forecast_accuracy.accuracy_details ?? {};
+  const detail = details[selectedCommodity];
+
+  const rows = inventory.data?.inventory ?? [];
+  const needsOrder = rows.filter((r) => r.status_color === 'red' || r.status_color === 'yellow');
+
+  const orderItem = (commodity: string) => {
+    setSelectedCommodity(commodity);
+    goToTab('ordering');
   };
 
-  // Fetch KPI data from backend
-  const fetchKPIData = async () => {
-    try {
-      const response = await fetch('http://localhost:8000/dashboard/kpi');
-      if (response.ok) {
-        const data = await response.json();
-        setKpiData(data);
-        console.log('KPI data received:', data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch KPI data:', err);
-      // Fallback to default KPI data
-      setKpiData({
-        forecast_accuracy: {
-          value: "78.5%",
-          trend: "+1.2% from last month"
-        },
-        active_commodities: {
-          value: "0",
-          trend: "No data"
-        },
-        avg_volatility: {
-          value: "5.5/10",
-          trend: "Stable"
-        },
-        cost_savings: {
-          value: "$0",
-          trend: "No data"
-        }
-      });
-    }
-  };
+  const chartData = useMemo(() => {
+    const { actual, forecast, upper, lower } = series;
+    if (!actual) return [];
+    const join = (t?: { x: string[]; y: number[] }) => (t ? { x: [actual.x.at(-1), ...t.x], y: [actual.y.at(-1), ...t.y] } : { x: [], y: [] });
+    return [
+      { ...join(upper), type: 'scatter', mode: 'lines', line: { width: 0, shape: 'spline' }, hoverinfo: 'skip' },
+      { ...join(lower), type: 'scatter', mode: 'lines', line: { width: 0, shape: 'spline' }, fill: 'tonexty', fillcolor: CHART.brassSoft, hoverinfo: 'skip' },
+      {
+        x: actual.x,
+        y: actual.y,
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: 'Actual',
+        line: { color: CHART.primary, width: 2.5 },
+        marker: { size: 6, color: CHART.primary, line: { color: '#fbfcfa', width: 1.5 } },
+        hovertemplate: `$%{y:.2f}${unit}<extra>Actual</extra>`,
+      },
+      {
+        ...join(forecast),
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Forecast',
+        line: { color: CHART.brass, width: 2.5, dash: 'dash', shape: 'spline' },
+        hovertemplate: `$%{y:.2f}${unit}<extra>Forecast</extra>`,
+      },
+    ];
+  }, [series, unit]);
 
-
-
-  // Initialize component data on mount
-  useEffect(() => {
-    fetchCommodities();
-    fetchKPIData();
-  }, []);
-
-  // Fetch chart data when commodity changes
-  useEffect(() => {
-    fetchChartData();
-  }, [fetchChartData]);
-
-  // Fetch weather data when ZIP code changes
-  const fetchWeatherData = useCallback(async () => {
-    if (!selectedZipCode || selectedZipCode.length < 5) return;
-    
-    try {
-      console.log('Fetching weather data for ZIP:', selectedZipCode);
-      const response = await fetch('http://localhost:8000/weather', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          state: selectedState,
-          zip_code: selectedZipCode,
-          days: 7
-        })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Weather data received:', data);
-        setWeatherData(data);
-      }
-    } catch (err) {
-      console.error('Failed to fetch weather data:', err);
-      // Set fallback weather data
-      setWeatherData({
-        current: { temp: 72, humidity: 45, condition: 'Sunny' },
-        forecast: 'Mostly sunny, 5% chance of rain'
-      });
-    }
-  }, [selectedState, selectedZipCode]);
-
-  // Fetch weather data when location changes
-  useEffect(() => {
-    fetchWeatherData();
-  }, [fetchWeatherData]);
-  // Mock chart data as fallback
-  const mockPriceData = [
-    {
-      x: ['Jan 1', 'Jan 8', 'Jan 15', 'Jan 22', 'Jan 29', 'Feb 5', 'Feb 12'],
-      y: [1.65, 1.72, 1.68, 1.75, 1.80, 1.85, 1.92],
-      type: 'scatter' as const,
-      mode: 'lines+markers' as const,
-      name: 'Actual Price',
-      line: { color: '#4F46E5', width: 3 },
-      marker: { size: 8 }
-    },
-    {
-      x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
-      y: [1.92, 2.05, 2.12, 2.15],
-      type: 'scatter' as const,
-      mode: 'lines+markers' as const,
-      name: 'Forecast',
-      line: { color: '#10B981', width: 3, dash: 'dot' },
-      marker: { size: 8 }
-    },
-    {
-      x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
-      y: [1.92, 2.15, 2.25, 2.30],
-      type: 'scatter' as const,
-      mode: 'lines' as const,
-      name: 'Upper Bound',
-      line: { color: '#10B981', width: 1 },
-      fillcolor: 'rgba(16, 185, 129, 0.2)',
-      fill: 'tonexty' as const
-    },
-    {
-      x: ['Feb 12', 'Feb 19', 'Feb 26', 'Mar 5'],
-      y: [1.92, 1.95, 1.99, 2.00],
-      type: 'scatter' as const,
-      mode: 'lines' as const,
-      name: 'Lower Bound',
-      line: { color: '#10B981', width: 1 },
-      fillcolor: 'rgba(16, 185, 129, 0.2)'
-    }
-  ];
-
-  const mockPriceLayout = {
-    title: '',
-    xaxis: { title: 'Date' },
-    yaxis: { title: 'Price per lb ($)' },
-    showlegend: true,
-    legend: { orientation: 'h' as const, y: 1.1 },
-    margin: { t: 0 },
-    plot_bgcolor: 'rgba(0,0,0,0)',
-    paper_bgcolor: 'rgba(0,0,0,0)'
-  };
+  const w = weather.data;
+  const sampleWeather = w?.city?.startsWith('City-');
+  const TodayIcon = weatherIcon(w?.current_condition);
 
   return (
-    <div className="tab-content active p-6">
-
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Forecast Accuracy</p>
-              <p className="text-2xl font-bold text-gray-900">
-                {kpiData?.forecast_accuracy?.value || '0%'}
-              </p>
-              <p className="text-sm text-green-600 mt-1">
-                {kpiData?.forecast_accuracy?.trend || 'No data'}
-              </p>
-            </div>
-            <div className="p-3 bg-blue-50 rounded-full">
-              <i className="fas fa-chart-line text-blue-600 text-xl"></i>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Active Commodities</p>
-              <p className="text-2xl font-bold text-gray-900">
-                {kpiData?.active_commodities?.value || '0'}
-              </p>
-              <p className="text-sm text-green-600 mt-1">
-                {kpiData?.active_commodities?.trend || 'No data'}
-              </p>
-            </div>
-            <div className="p-3 bg-green-50 rounded-full">
-              <i className="fas fa-seedling text-green-600 text-xl"></i>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Avg Volatility</p>
-              <p className="text-2xl font-bold text-gray-900">
-                {kpiData?.avg_volatility?.value || '0/10'}
-              </p>
-              <p className="text-sm text-gray-600 mt-1">
-                {kpiData?.avg_volatility?.trend || 'No data'}
-              </p>
-            </div>
-            <div className="p-3 bg-yellow-50 rounded-full">
-              <i className="fas fa-chart-bar text-yellow-600 text-xl"></i>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Cost Savings</p>
-              <p className="text-2xl font-bold text-gray-900">
-                {kpiData?.cost_savings?.value || '$0'}
-              </p>
-              <p className="text-sm text-green-600 mt-1">
-                {kpiData?.cost_savings?.trend || 'No data'}
-              </p>
-            </div>
-            <div className="p-3 bg-purple-50 rounded-full">
-              <i className="fas fa-dollar-sign text-purple-600 text-xl"></i>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Inventory Status and Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Inventory Status */}
-        <div className="bg-white rounded-xl shadow-md p-6 lg:col-span-1">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Inventory Status</h2>
-            <button 
-              onClick={fetchInventoryData}
-              className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-            >
-              {inventoryLoading ? 'Refreshing...' : 'Refresh'}
-            </button>
-          </div>
-          <div className="space-y-4">
-            {inventoryLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
-                <span className="ml-2 text-gray-600">Loading inventory...</span>
-              </div>
-            ) : inventoryAlerts.length > 0 ? (
-              inventoryAlerts.map((alert, index) => (
-                <div key={index} className={`${
-                  alert.color === 'red' ? 'alert-pulse bg-red-50 border-l-4 border-red-500' :
-                  alert.color === 'yellow' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
-                  alert.color === 'green' ? 'bg-green-50 border-l-4 border-green-500' :
-                  'bg-blue-50 border-l-4 border-blue-500'
-                } p-4 rounded-r-lg`}>
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                      <i className={`fas fa-${alert.icon} ${
-                        alert.color === 'red' ? 'text-red-500' :
-                        alert.color === 'yellow' ? 'text-yellow-500' :
-                        alert.color === 'green' ? 'text-green-500' :
-                        'text-blue-500'
-                      }`}></i>
-                </div>
-                <div className="ml-3">
-                      <p className={`text-sm font-medium ${
-                        alert.color === 'red' ? 'text-red-800' :
-                        alert.color === 'yellow' ? 'text-yellow-800' :
-                        alert.color === 'green' ? 'text-green-800' :
-                        'text-blue-800'
-                      }`}>
-                        {alert.commodity} - {alert.status.charAt(0).toUpperCase() + alert.status.slice(1)}
-                      </p>
-                      <p className={`text-sm ${
-                        alert.color === 'red' ? 'text-red-600' :
-                        alert.color === 'yellow' ? 'text-yellow-600' :
-                        alert.color === 'green' ? 'text-green-600' :
-                        'text-blue-600'
-                      }`}>
-                        {alert.message}
-                      </p>
-              </div>
-            </div>
-                </div>
-              ))
+    <>
+      <PageHeader
+        crumb={
+          <>
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long' })} <span className="mx-1.5">›</span> Kitchen in {selectedZipCode}
+          </>
+        }
+        title={greeting()}
+        summary={
+          <>
+            {needsOrder.length > 0 ? (
+              <>
+                <b>
+                  {needsOrder.length} item{needsOrder.length === 1 ? '' : 's'}
+                </b>{' '}
+                need ordering soon.{' '}
+              </>
             ) : (
-              <div className="text-center py-8 text-gray-500">
-                <i className="fas fa-box-open text-4xl mb-2"></i>
-                <p>No inventory items tracked</p>
-                <p className="text-sm">Use Smart Ordering to add items</p>
-              </div>
+              <>Stock is healthy. </>
             )}
-          </div>
-        </div>
-
-        {/* Price Chart */}
-        <div className="bg-white rounded-xl shadow-md p-6 lg:col-span-2">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">30-Day Price Trends</h2>
-            <div className="flex items-center space-x-4">
-              {/* Commodity Selector */}
-              <div className="flex items-center space-x-2">
-                <label className="text-sm font-medium text-gray-700">Commodity:</label>
-                <select 
-                  value={selectedCommodity} 
-                  onChange={(e) => setSelectedCommodity(e.target.value)}
-                  className="border rounded-lg px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  {commodities.map((commodity) => (
-                    <option key={commodity} value={commodity}>{commodity}</option>
-                  ))}
-                </select>
-              </div>
-              {loading && (
-                <div className="flex items-center text-sm text-gray-500">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600 mr-2"></div>
-                  Loading...
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="h-64">
-            {loading ? (
-              <div className="flex items-center justify-center h-96">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-                <span className="ml-3 text-gray-600">Loading chart data for {selectedCommodity}...</span>
-              </div>
-            ) : (
-              <Plot
-                data={chartData?.data || mockPriceData}
-                layout={chartData?.layout || mockPriceLayout}
-                style={{width: '100%', height: '400px'}}
-                config={chartData?.config || {displayModeBar: false}}
-              />
+            {weekChange !== undefined && (
+              <>
+                {selectedCommodity} is forecast to <b>{Math.abs(weekChange) < 0.05 ? 'hold steady' : `${weekChange > 0 ? 'rise' : 'fall'} ${Math.abs(weekChange).toFixed(1)}%`}</b> over the next 7 days.
+              </>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <Button icon={ArrowUpRight} onClick={() => goToTab('predictions')}>
+            Open predictions
+          </Button>
+        }
+      />
 
-
-
-      {/* Inventory Table */}
-      <div className="bg-white rounded-xl shadow-md overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-800">Inventory Overview</h2>
-            <div className="flex items-center space-x-4">
-              <button 
-                onClick={fetchInventoryData}
-                className="text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-              >
-                {inventoryLoading ? 'Refreshing...' : 'Refresh'}
-              </button>
-            <button className="text-indigo-600 hover:text-indigo-800 text-sm font-medium">Export Data</button>
-            </div>
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          {inventoryLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-              <span className="ml-3 text-gray-600">Loading inventory data...</span>
-            </div>
-          ) : inventoryData.length > 0 ? (
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ingredient</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Stock</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Usage</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Days Left</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shelf Life</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price Trend</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-                {inventoryData.map((item, index) => (
-                  <tr key={item.id || index} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center">
-                    <div className="flex-shrink-0 h-10 w-10">
-                          <img 
-                            className="h-10 w-10 rounded-full" 
-                            src={getIngredientImage(item.ingredient)} 
-                            alt={item.ingredient} 
-                          />
-                    </div>
-                    <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900">{item.ingredient}</div>
-                          <div className="text-sm text-gray-500">Fresh, Local</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{item.current_stock}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{item.daily_usage}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{item.days_left}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{item.shelf_life}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        item.status_color === 'red' ? 'bg-red-100 text-red-800' :
-                        item.status_color === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
-                        item.status_color === 'green' ? 'bg-green-100 text-green-800' :
-                        'bg-blue-100 text-blue-800'
-                      }`}>
-                        {item.status}
-                      </span>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center">
-                        <i className={`fas fa-arrow-${item.price_trend?.direction || 'right'} ${
-                          item.price_trend?.trend === 'rising' ? 'text-red-500' :
-                          item.price_trend?.trend === 'falling' ? 'text-green-500' :
-                          'text-gray-500'
-                        } mr-1`}></i>
-                        <span className="text-sm text-gray-900">
-                          {item.price_trend?.percentage || '0%'} {item.price_trend?.trend === 'rising' ? 'next week' : item.price_trend?.trend === 'falling' ? 'next week' : ''}
-                        </span>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <button 
-                        className={`${
-                          item.action === 'Order Now' ? 'text-indigo-600 hover:text-indigo-900' : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                        onClick={() => {
-                          // Navigate to ordering tab or trigger order action
-                          window.dispatchEvent(new CustomEvent('switchTab', { detail: { tab: 'ordering', commodity: item.ingredient } }));
-                        }}
-                      >
-                        {item.action}
-                      </button>
-                </td>
-              </tr>
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* Price pulse: the signature view. History left of the marker, forecast to the right. */}
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title={`${selectedCommodity} price pulse`}
+            subtitle={lastDate ? `USDA retail prices through ${shortDate(lastDate)}, then the model's forecast.` : 'USDA retail prices, then the model’s forecast.'}
+            action={
+              <Select aria-label="Commodity" value={selectedCommodity} onChange={(e) => setSelectedCommodity(e.target.value)}>
+                {commodities.map((c) => (
+                  <option key={c}>{c}</option>
                 ))}
-            </tbody>
-          </table>
-          ) : (
-            <div className="text-center py-12">
-              <i className="fas fa-clipboard-list text-4xl text-gray-400 mb-4"></i>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No Inventory Data</h3>
-              <p className="text-gray-500 mb-4">Start by adding inventory items in the Smart Ordering tab</p>
-              <button 
-                onClick={() => {
-                  window.dispatchEvent(new CustomEvent('switchTab', { detail: { tab: 'ordering' } }));
+              </Select>
+            }
+          />
+
+          <div className="mx-5 grid grid-cols-2 overflow-hidden rounded-tile border border-line md:grid-cols-4">
+            <KpiTile label="Latest price" loading={!trends.data && trends.loading}>
+              <span className="tabular">{current !== undefined ? money(current) : '—'}</span>
+              <small className="ml-0.5 text-[13px] font-semibold text-faint">{unit}</small>
+              <Sub>{current !== undefined && lastWeek !== undefined && <Delta value={pct(lastWeek, current)} upIsGood={false} />} vs prior report</Sub>
+            </KpiTile>
+            <KpiTile label="In 7 days" loading={!week.data && week.loading}>
+              <span className="tabular text-brass">{weekEnd !== undefined ? money(weekEnd) : '—'}</span>
+              <Sub>{weekChange !== undefined && <Delta value={weekChange} upIsGood={false} />} vs latest</Sub>
+            </KpiTile>
+            <KpiTile label="Typical error" loading={!kpis.data && kpis.loading}>
+              <span className="tabular">{detail ? `±${money(detail.mae)}` : '—'}</span>
+              <Sub>{detail ? <><Delta value={detail.skill_pct} /> vs. last week&apos;s price</> : 'model is training'}</Sub>
+            </KpiTile>
+            <KpiTile label="Volatility" loading={!volatility.data && volatility.loading}>
+              <span className="tabular">{volatility.data ? volatility.data.volatility_score.toFixed(1) : '—'}</span>
+              <small className="ml-0.5 text-[13px] font-semibold text-faint">/10</small>
+              <Sub>{volatility.data ? `${volatility.data.volatility_level}, ±${volatility.data.expected_price_swing}% swings` : 'last 14 days'}</Sub>
+            </KpiTile>
+          </div>
+
+          <div className="h-[300px] px-3 pb-1 pt-3">
+            {trends.error ? (
+              <Empty icon={CloudFog} title="Couldn't load prices" body={trends.error} action={<Button onClick={trends.reload}>Try again</Button>} />
+            ) : chartData.length ? (
+              <Chart
+                data={chartData}
+                layout={{
+                  yaxis: { tickprefix: '$', tickformat: '.2f' },
+                  xaxis: { type: 'date', tickformat: '%b %-d' },
+                  shapes: lastDate ? [{ type: 'line', x0: lastDate, x1: lastDate, yref: 'paper', y0: 0, y1: 1, line: { color: CHART.ink, width: 1, dash: 'dot' } }] : [],
+                  annotations: lastDate
+                    ? [{ x: lastDate, y: 1, yref: 'paper', yanchor: 'bottom', text: 'Latest report', showarrow: false, bgcolor: CHART.ink, font: { color: '#fff', size: 11 }, borderpad: 4 }]
+                    : [],
+                  margin: { t: 26 },
                 }}
-                className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
-              >
-                Go to Smart Ordering
-              </button>
+              />
+            ) : (
+              <Skeleton className="h-full" />
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 pb-5 text-[12.5px] text-muted">
+            <LegendDot className="bg-primary" label="Actual price" />
+            <LegendDot className="h-0.5 w-4 rounded-none border-t-2 border-dashed border-brass bg-transparent" label="Forecast" />
+            <LegendDot className="h-2.5 w-4 rounded-sm bg-brass/20" label="Likely range" />
+          </div>
+        </Card>
+
+        {/* Stock on hand */}
+        <Card className="flex flex-col">
+          <CardHeader
+            title="Stock on hand"
+            subtitle="How long each item lasts at today's usage."
+            action={
+              <Button variant="ghost" className="h-8 px-3" onClick={() => goToTab('ordering')}>
+                Manage
+              </Button>
+            }
+          />
+          <div className="flex-1 px-3 pb-3">
+            {inventory.loading && !inventory.data ? (
+              <div className="space-y-2 px-2">
+                {[0, 1, 2].map((i) => (
+                  <Skeleton key={i} className="h-14" />
+                ))}
+              </div>
+            ) : rows.length === 0 ? (
+              <Empty icon={PackageOpen} title="No stock logged yet" body="Log what's in the walk-in to see days of cover and order timing." action={<Button variant="primary" onClick={() => goToTab('ordering')}>Log stock</Button>} />
+            ) : (
+              <ul className="space-y-1">
+                {rows.map((r) => {
+                  const days = num(r.days_left);
+                  const tone = statusTone(r.status_color);
+                  return (
+                    <li key={r.id} className="rounded-tile px-2 py-2.5 hover:bg-surface-2">
+                      <div className="flex items-center gap-3">
+                        <ProduceTile name={r.ingredient} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-[14px] font-semibold">{r.ingredient}</span>
+                            <Pill tone={tone}>{statusLabel(r.status)}</Pill>
+                          </div>
+                          <div className="mt-0.5 text-[12.5px] text-muted">
+                            {r.current_stock} · uses {r.daily_usage.replace('/day', ' a day')}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center gap-3 pl-12">
+                        <Meter value={days / 14} tone={tone} label={`${r.ingredient} days of cover`} />
+                        <span className="tabular w-16 shrink-0 text-right text-[12.5px] font-semibold">{days.toFixed(1)} days</span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </Card>
+
+        {/* Needs a look */}
+        <Card>
+          <CardHeader
+            title={
+              <span className="flex items-center gap-2">
+                Needs a look
+                {needsOrder.length > 0 && <span className="tabular rounded-full bg-[#dd5a43] px-2 py-0.5 text-[11px] font-bold text-white">{needsOrder.length}</span>}
+              </span>
+            }
+            subtitle="Items that run out before a normal delivery cycle."
+          />
+          <div className="space-y-2 px-4 pb-4">
+            {needsOrder.length === 0 ? (
+              <Empty icon={CheckCircle2} title="Nothing needs you right now" body="Anything with under six days of cover will show up here." />
+            ) : (
+              <>
+                {needsOrder.map((r) => (
+                  <div key={r.id} className={cx('rounded-tile border p-3', r.status_color === 'red' ? 'border-bad/20 bg-bad/[0.05]' : 'border-[#d99a1e]/25 bg-[#d99a1e]/[0.07]')}>
+                    <div className="flex items-start gap-3">
+                      <ProduceTile name={r.ingredient} size="sm" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13.5px] font-semibold">{r.ingredient} runs out in {num(r.days_left).toFixed(1)} days</p>
+                        <p className="text-[12.5px] text-muted">
+                          {r.current_stock} left, using {r.daily_usage}
+                        </p>
+                      </div>
+                      <Button variant="secondary" className="h-8 px-3 text-[12.5px]" onClick={() => orderItem(r.ingredient)}>
+                        Order
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </Card>
+
+        {/* Model reliability */}
+        <Card>
+          <CardHeader title="Forecast skill" subtitle="How much smaller each model's error is than repeating last week's price." />
+          <ul className="px-5 pb-4">
+            {commodities.map((c) => {
+              const skill = details[c]?.skill_pct;
+              // 10 segments cover 0–30% better than the naive guess
+              const filled = skill === undefined ? 0 : Math.round(Math.min(30, Math.max(0, skill)) / 3);
+              const tone = skill === undefined ? '' : skill >= 10 ? 'bg-[#2f9a5a]' : skill > 0 ? 'bg-[#d99a1e]' : 'bg-[#dd5a43]';
+              return (
+                <li key={c}>
+                  <button
+                    onClick={() => setSelectedCommodity(c)}
+                    className="grid w-full grid-cols-[1fr_auto_3.5rem] items-center gap-3 rounded-lg py-1.5 text-left hover:bg-surface-2"
+                    title={skill === undefined ? `Select ${c} to train its model` : `Show ${c}`}
+                  >
+                    <span className={cx('truncate text-[13px]', c === selectedCommodity ? 'font-bold text-ink' : 'text-muted')}>{c}</span>
+                    <span className="flex gap-[3px]" aria-hidden="true">
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <span key={i} className={cx('h-3.5 w-2 rounded-[3px]', i < filled ? tone : 'bg-well')} />
+                      ))}
+                    </span>
+                    <span className="tabular text-right text-[12.5px] font-semibold">{skill === undefined ? <span className="font-medium text-faint">Untrained</span> : `${skill >= 0 ? '+' : ''}${skill.toFixed(0)}%`}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-line px-5 py-3 text-[12px] text-muted">
+            <LegendDot className="bg-[#2f9a5a]" label="10%+ better" />
+            <LegendDot className="bg-[#d99a1e]" label="Slightly better" />
+            <LegendDot className="bg-[#dd5a43]" label="No better" />
+            <span className="ml-auto text-faint">Select a row to train it</span>
+          </div>
+        </Card>
+
+        {/* Weather */}
+        <Card>
+          <CardHeader title="Growing weather" subtitle={sampleWeather ? `Sample data for ZIP ${selectedZipCode}. Add an OpenWeather key for live weather.` : `${w?.city ?? 'Your area'}, next five days.`} />
+          <div className="px-5 pb-5">
+            {!w ? (
+              <Skeleton className="h-40" />
+            ) : (
+              <>
+                <div className="flex items-center gap-4">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-[16px] bg-[#f3ead7] text-[#8a5a12]">
+                    <TodayIcon className="h-7 w-7" />
+                  </span>
+                  <div>
+                    <div className="tabular text-[30px] font-semibold leading-none tracking-tight">{Math.round(w.current_temp)}°F</div>
+                    <div className="mt-1 flex items-center gap-3 text-[13px] text-muted">
+                      <span>{w.current_condition}</span>
+                      <span className="flex items-center gap-1">
+                        <Droplets className="h-3.5 w-3.5" />
+                        {Math.round(w.current_humidity)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-5 gap-1.5">
+                  {w.forecast.slice(0, 5).map((d) => {
+                    const Icon = weatherIcon(d.condition);
+                    return (
+                      <div key={d.date} className="rounded-tile bg-surface-2 py-2 text-center">
+                        <div className="text-[11.5px] font-semibold text-muted">{new Date(`${d.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</div>
+                        <Icon className="mx-auto my-1.5 h-4 w-4 text-muted" />
+                        <div className="tabular text-[12.5px] font-semibold">{Math.round(d.temp_high)}°</div>
+                        <div className="tabular text-[11.5px] text-faint">{Math.round(d.temp_low)}°</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {week.data?.weather_impact && (
+                  <p className="mt-4 text-[12.5px] text-muted">
+                    <Pill tone={week.data.weather_impact.impact === 'negative' ? 'warn' : week.data.weather_impact.impact === 'positive' ? 'good' : 'neutral'}>
+                      {week.data.weather_impact.impact === 'negative' ? 'Tough growing week' : week.data.weather_impact.impact === 'positive' ? 'Good growing week' : 'Neutral week'}
+                    </Pill>{' '}
+                    <span className="mt-1.5 block">{week.data.weather_impact.explanation}</span>
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        </Card>
+
+        {/* Inventory table */}
+        <Card className="lg:col-span-3">
+          <CardHeader
+            title="Inventory"
+            subtitle="Everything tracked in the walk-in, most urgent first."
+            action={
+              <Button variant="secondary" className="h-9" onClick={() => goToTab('ordering')}>
+                Update stock
+              </Button>
+            }
+          />
+          {rows.length === 0 ? (
+            <Empty icon={PackageOpen} title="Nothing tracked yet" body="Add an item in Smart ordering and it will show up here with days of cover and price direction." />
+          ) : (
+            <div className="overflow-x-auto px-2 pb-3">
+              <table className="w-full min-w-[760px] text-left text-[13.5px]">
+                <thead>
+                  <tr className="text-[12px] text-faint">
+                    {['Item', 'In stock', 'Daily use', 'Days of cover', 'Shelf life', 'Status', 'Price next week', ''].map((h) => (
+                      <th key={h} className="px-3 py-2 font-semibold">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const tone = statusTone(r.status_color);
+                    const trend = r.price_trend;
+                    const change = parseFloat(trend.percentage.replace(/[^\d.-]/g, '')) || 0;
+                    return (
+                      <tr key={r.id} className="border-t border-line hover:bg-surface-2">
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-3">
+                            <ProduceTile name={r.ingredient} size="sm" />
+                            <span className="font-semibold">{r.ingredient}</span>
+                          </div>
+                        </td>
+                        <td className="tabular px-3 py-3">{r.current_stock}</td>
+                        <td className="tabular px-3 py-3 text-muted">{r.daily_usage}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-20">
+                              <Meter value={num(r.days_left) / 14} tone={tone} label={`${r.ingredient} days of cover`} />
+                            </div>
+                            <span className="tabular">{num(r.days_left).toFixed(1)}</span>
+                          </div>
+                        </td>
+                        <td className="tabular px-3 py-3 text-muted">{r.shelf_life}</td>
+                        <td className="px-3 py-3">
+                          <Pill tone={tone}>{statusLabel(r.status)}</Pill>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Delta value={trend.trend === 'falling' ? -Math.abs(change) : Math.abs(change)} upIsGood={false} />
+                        </td>
+                        <td className="px-3 py-3 text-right">
+                          <Button variant={r.action === 'Order Now' ? 'primary' : 'ghost'} className="h-8 px-3 text-[12.5px]" onClick={() => orderItem(r.ingredient)}>
+                            {r.action === 'Order Now' ? 'Order' : 'Plan'}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-        </div>
+        </Card>
       </div>
+    </>
+  );
+}
+
+function KpiTile({ label, loading, children }: { label: string; loading?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="border-line p-4 [&:not(:first-child)]:border-l max-md:[&:nth-child(3)]:border-l-0 max-md:[&:nth-child(n+3)]:border-t">
+      <div className="text-[12.5px] font-semibold text-muted">{label}</div>
+      {loading ? <Skeleton className="mt-2 h-8 w-24" /> : <div className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.02em]">{children}</div>}
     </div>
   );
 }
 
-// Helper function to get ingredient images
-const getIngredientImage = (ingredient: string) => {
-  const imageMap: { [key: string]: string } = {
-    'Tomatoes': 'https://cdn-icons-png.flaticon.com/512/2909/2909896.png',
-    'Lettuce': 'https://cdn-icons-png.flaticon.com/512/535/535183.png',
-    'Onions, Green': 'https://cdn-icons-png.flaticon.com/512/2909/2909899.png',
-    'Carrots': 'https://cdn-icons-png.flaticon.com/512/2909/2909897.png',
-    'Broccoli': 'https://cdn-icons-png.flaticon.com/512/135/135620.png',
-    'Cucumbers': 'https://cdn-icons-png.flaticon.com/512/765/765559.png',
-    'Cauliflower': 'https://cdn-icons-png.flaticon.com/512/135/135588.png',
-    'Cabbage': 'https://cdn-icons-png.flaticon.com/512/135/135578.png',
-    'Asparagus': 'https://cdn-icons-png.flaticon.com/512/135/135669.png',
-    'Sweet Potatoes': 'https://cdn-icons-png.flaticon.com/512/2909/2909897.png'
-  };
-  
-  return imageMap[ingredient] || 'https://cdn-icons-png.flaticon.com/512/2909/2909896.png';
-};
+function Sub({ children }: { children: React.ReactNode }) {
+  return <div className="mt-1.5 flex items-center gap-1.5 text-[12.5px] font-medium tracking-normal text-faint">{children}</div>;
+}
+
+function LegendDot({ className, label }: { className: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={cx('inline-block h-2.5 w-2.5 rounded-full', className)} />
+      {label}
+    </span>
+  );
+}
