@@ -222,7 +222,8 @@ def process_and_append_data():
         combined_data = combined_data[valid_date_mask]
         
         # Sort by date (latest to oldest)
-        combined_data = combined_data.sort_values('report_date', ascending=False)
+        # Stable sort keeps existing rows ahead of new ones within a date, so keep='last' prefers the fresh scrape
+        combined_data = combined_data.sort_values('report_date', ascending=False, kind='stable')
         
         # Convert date back to string format for CSV
         combined_data['report_date'] = combined_data['report_date'].dt.strftime('%m/%d/%Y')
@@ -233,7 +234,7 @@ def process_and_append_data():
         
         # Define columns to consider for duplicates
         dedup_columns = ['report_date', 'region', 'class', 'commodity', 'variety', 'organic', 'unit']
-        combined_data = combined_data.drop_duplicates(subset=dedup_columns, keep='first')
+        combined_data = combined_data.drop_duplicates(subset=dedup_columns, keep='last')
         
         after_dedup = len(combined_data)
         logger.info(f"Removed {before_dedup - after_dedup} duplicate rows")
