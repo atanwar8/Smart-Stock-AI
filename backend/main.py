@@ -1807,9 +1807,18 @@ async def run_scraper_and_train():
         traceback.print_exc()
         return False, str(e)
 
+# One refresh at a time: each run starts Chrome and retrains every model
+scrape_lock = asyncio.Lock()
+
 @app.post("/scrape-and-train")
 async def scrape_and_train():
     """Trigger automated scraping and model retraining"""
+    if scrape_lock.locked():
+        raise HTTPException(status_code=409, detail="A data refresh is already running. Try again when it finishes.")
+    async with scrape_lock:
+        return await _scrape_and_train()
+
+async def _scrape_and_train():
     try:
         print("\n🚀 === STARTING SCRAPE AND TRAIN PROCESS ===")
         
