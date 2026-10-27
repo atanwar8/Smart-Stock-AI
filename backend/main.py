@@ -249,6 +249,10 @@ class AlertManager:
 # Initialize alert manager
 alert_manager = AlertManager()
 
+def weekly_frame(commodity: str) -> pd.DataFrame:
+    """Weekly average prices in one unit, as report_date / current_wtd_avg_price columns"""
+    return forecaster_utils.weekly_prices(forecaster.train_data, commodity).rename('current_wtd_avg_price').reset_index()
+
 # Inventory Management System
 class InventoryManager:
     def __init__(self):
@@ -575,9 +579,12 @@ async def get_commodities():
     if not forecaster:
         raise HTTPException(status_code=503, detail="Forecaster not initialized")
     
+    rows = forecaster.train_data
     return {
         "viable_commodities": forecaster.viable_commodities,
         "commodity_mapping": forecaster.commodity_mapping,
+        # Prices are quoted in each commodity's most common USDA unit (per lb, each, per bunch, ...)
+        "units": {c: rows.loc[rows['commodity'] == c, 'unit'].mode().iloc[0] for c in forecaster.viable_commodities},
         "total_count": len(forecaster.viable_commodities)
     }
 
@@ -683,6 +690,11 @@ async def predict_prices(request: PredictionRequest) -> PredictionResponse:
 
 # Dashboard endpoints to power frontend components
 
+def skill_vs_naive(performance: Dict) -> float:
+    """How much lower the model's typical error is than just repeating last week's price, in percent"""
+    naive = performance.get('naive_mae')
+    return float((1 - performance['mae'] / naive) * 100) if naive else 0.0
+
 @app.get("/dashboard/kpi")
 async def get_kpi():
     """Get dashboard KPI data with real model accuracy"""
@@ -709,7 +721,8 @@ async def get_kpi():
                         accuracy_details[commodity] = {
                             'r2_score': r2_score,
                             'accuracy_pct': accuracy_pct,
-                            'mae': performance.get('mae', 0)
+                            'mae': performance.get('mae', 0),
+                            'skill_pct': skill_vs_naive(performance)
                         }
                         total_accuracy += accuracy_pct
                         model_count += 1
@@ -727,7 +740,8 @@ async def get_kpi():
                             accuracy_details[commodity] = {
                                 'r2_score': r2_score,
                                 'accuracy_pct': accuracy_pct,
-                                'mae': performance.get('mae', 0)
+                                'mae': performance.get('mae', 0),
+                                'skill_pct': skill_vs_naive(performance)
                             }
                             total_accuracy += accuracy_pct
                             model_count += 1
@@ -741,10 +755,8 @@ async def get_kpi():
             overall_accuracy = 0
             print("   ⚠️ No model performance data found")
         
-        # Generate realistic trend (simulate month-over-month improvement)
-        import random
-        trend_change = random.uniform(-2.5, 3.5)  # -2.5% to +3.5%
-        trend_direction = "+" if trend_change >= 0 else ""
+        skills = [d['skill_pct'] for d in accuracy_details.values()]
+        average_skill = float(np.mean(skills)) if skills else 0.0
         
         # Get current inventory count
         inventory_count = len(inventory_manager.get_inventory_list())
@@ -771,7 +783,7 @@ async def get_kpi():
         return {
             "forecast_accuracy": {
                 "value": f"{overall_accuracy:.1f}%",
-                "trend": f"{trend_direction}{trend_change:.1f}% from last month",
+                "trend": f"{average_skill:+.1f}% vs. last week's price as a guess",
                 "models_trained": model_count,
                 "accuracy_details": accuracy_details
             },
@@ -1100,7 +1112,7 @@ async def get_price_trend_for_ingredient(ingredient: str) -> Dict:
             
             # Try to get some basic price statistics from training data if available
             if hasattr(forecaster, 'train_data') and forecaster.train_data is not None:
-                commodity_data = forecaster.train_data[forecaster.train_data['commodity'] == ingredient]
+                commodity_data = weekly_frame(ingredient)
                 if len(commodity_data) > 1:
                     recent_prices = commodity_data['current_wtd_avg_price'].tail(10).dropna()
                     if len(recent_prices) >= 2:
@@ -1137,9 +1149,7 @@ async def get_price_trends_chart(request: PredictionRequest):
         if forecaster.train_data is None:
             raise HTTPException(status_code=503, detail="Training data not available")
         
-        commodity_data = forecaster.train_data[
-            forecaster.train_data['commodity'] == request.commodity
-        ].sort_values('report_date').tail(60)  # Get more data for context
+        commodity_data = weekly_frame(request.commodity).tail(10)
         
         # Generate predictions
         if request.commodity not in forecaster.models:
@@ -1149,15 +1159,7 @@ async def get_price_trends_chart(request: PredictionRequest):
             forecaster, request.commodity, 30, weather_data
         )
         
-        # Use actual data points - sample every ~7 days to reduce clutter but keep real dates
-        total_points = len(commodity_data)
-        if total_points > 12:
-            # Sample approximately every 7-10 days to get ~8-12 historical points
-            step = max(1, total_points // 10)
-            sampled_indices = list(range(0, total_points, step))
-            commodity_data_sampled = commodity_data.iloc[sampled_indices]
-        else:
-            commodity_data_sampled = commodity_data
+        commodity_data_sampled = commodity_data
         
         historical_data = {
             'x': commodity_data_sampled['report_date'].dt.strftime('%Y-%m-%d').tolist(),
@@ -1373,9 +1375,7 @@ async def get_seasonality_heatmap(commodity: str):
             raise HTTPException(status_code=503, detail="Training data not available")
         
         # Get historical data for the commodity
-        commodity_data = forecaster.train_data[
-            forecaster.train_data['commodity'] == commodity
-        ].copy()
+        commodity_data = weekly_frame(commodity)
         
         if len(commodity_data) == 0:
             raise HTTPException(status_code=404, detail=f"No data found for {commodity}")
@@ -1615,9 +1615,7 @@ async def get_seasonal_patterns(commodity: str):
             raise HTTPException(status_code=503, detail="Training data not available")
         
         # Get historical data for the commodity
-        commodity_data = forecaster.train_data[
-            forecaster.train_data['commodity'] == commodity
-        ].copy()
+        commodity_data = weekly_frame(commodity)
         
         if len(commodity_data) == 0:
             # Return mock data if no historical data
@@ -1716,119 +1714,31 @@ async def get_seasonal_patterns(commodity: str):
 
 @app.get("/market-volatility")
 async def get_market_volatility(commodity: str, state: str = "CA", zip_code: str = "10001"):
-    """Get market volatility gauge for predictions tab (frontend compatibility)"""
+    """How much this commodity's weekly price has moved over the last quarter, as a 0-10 score"""
     if not forecaster:
         raise HTTPException(status_code=503, detail="Forecaster not initialized")
-    
-    try:
-        # Get volatility based primarily on commodity characteristics with some historical influence
-        commodity_base_volatility = {
-            'Sweet Potatoes': (2.0, 3.5),   # Low volatility range due to storage
-            'Cabbage': (2.5, 4.0),          # Low-moderate due to durability  
-            'Carrots': (3.0, 4.5),          # Low-moderate due to good storage
-            'Onions, Green': (4.0, 6.0),    # Moderate due to quick turnover
-            'Cucumbers': (4.5, 6.5),        # Moderate due to greenhouse production
-            'Tomatoes': (5.0, 7.0),         # Moderate-high due to weather sensitivity
-            'Cauliflower': (5.5, 7.5),      # Moderate-high due to temperature sensitivity
-            'Lettuce': (6.0, 8.0),          # High due to short shelf life
-            'Broccoli': (6.5, 8.5),         # High due to weather sensitivity
-            'Asparagus': (7.0, 9.0)         # Very high due to premium seasonal pricing
-        }
-        
-        # Get base range for this commodity
-        volatility_range = commodity_base_volatility.get(commodity, (4.0, 6.0))
-        base_min, base_max = volatility_range
-        
-        # Start with commodity-based score
-        volatility_score = np.random.uniform(base_min, base_max)
-        
-        # Add slight historical influence if data is available
-        if forecaster.train_data is not None:
-            commodity_data = forecaster.train_data[
-                forecaster.train_data['commodity'] == commodity
-            ].copy()
-            
-            if len(commodity_data) > 30:
-                prices = commodity_data['current_wtd_avg_price'].dropna()
-                if len(prices) > 30:
-                    # Calculate a simple historical volatility factor
-                    recent_prices = prices.tail(30)
-                    price_std = recent_prices.std()
-                    price_mean = recent_prices.mean()
-                    
-                    if price_mean > 0:
-                        historical_factor = (price_std / price_mean) * 5  # Scale down influence
-                        # Blend with commodity base (70% commodity characteristics, 30% historical)
-                        volatility_score = volatility_score * 0.7 + historical_factor * 0.3
-        
-        # Add small random variation for realism
-        volatility_score += np.random.uniform(-0.3, 0.3)
-        
-        # Ensure realistic bounds
-        volatility_score = max(1.5, min(9.0, volatility_score))
-        
-        # Determine volatility level and expected price swing based on actual score
-        if volatility_score <= 3.5:
-            volatility_desc = "low"
-            price_swing = round(volatility_score * 1.5 + 3)  # 4-8%
-        elif volatility_score <= 6.5:
-            volatility_desc = "moderate" 
-            price_swing = round(volatility_score * 1.8 + 2)  # 8-14%
-        else:
-            volatility_desc = "high"
-            price_swing = round(volatility_score * 2.2 + 3)  # 18-24%
-        
-        # Commodity-specific volatility insights
-        commodity_insights = {
-            'Tomatoes': 'seasonal demand and weather sensitivity',
-            'Lettuce': 'short shelf life and transportation costs',
-            'Carrots': 'storage capability and seasonal harvests', 
-            'Broccoli': 'weather sensitivity and growing conditions',
-            'Cucumbers': 'greenhouse production and seasonal variations',
-            'Cauliflower': 'temperature sensitivity and harvest timing',
-            'Cabbage': 'storage durability and seasonal demand',
-            'Asparagus': 'short growing season and premium pricing',
-            'Sweet Potatoes': 'long storage life and stable demand',
-            'Onions, Green': 'quick turnover and regional supply'
-        }
-        
-        insight = commodity_insights.get(commodity, 'market conditions and supply-demand factors')
-        
-        volatility_analysis = f"Current market volatility is {volatility_desc} ({volatility_score:.1f}/10). Expect price swings of ±{price_swing}% over the next 14 days based on {commodity} {insight}."
-        
-        return {
-            'volatility_score': float(volatility_score),
-            'commodity': commodity,
-            'period': '14-day',
-            'volatility_analysis': volatility_analysis,
-            'volatility_level': volatility_desc,
-            'expected_price_swing': price_swing
-        }
-        
-    except Exception as e:
-        # Fallback with realistic random values
-        volatility_score = float(np.random.uniform(2.5, 8.5))
-        
-        if volatility_score <= 3.5:
-            volatility_desc = "low"
-            price_swing = round(volatility_score * 1.5 + 3)
-        elif volatility_score <= 6.5:
-            volatility_desc = "moderate"
-            price_swing = round(volatility_score * 1.8 + 2)
-        else:
-            volatility_desc = "high"
-            price_swing = round(volatility_score * 2.2 + 3)
-        
-        volatility_analysis = f"Current market volatility is {volatility_desc} ({volatility_score:.1f}/10). Expect price swings of ±{price_swing}% over the next 14 days based on {commodity} market analysis."
-        
-        return {
-            'volatility_score': volatility_score,
-            'commodity': commodity,
-            'period': '14-day',
-            'volatility_analysis': volatility_analysis,
-            'volatility_level': volatility_desc,
-            'expected_price_swing': price_swing
-        }
+
+    series = forecaster_utils.weekly_prices(forecaster.train_data, commodity).tail(14)
+    if len(series) < 3:
+        raise HTTPException(status_code=404, detail=f"Not enough price history for {commodity}")
+
+    # Standard deviation of week-over-week changes, in percent: 5% a week scores 5/10
+    weekly_move_pct = float(np.std(np.diff(np.log(series.to_numpy()))) * 100)
+    volatility_score = min(10.0, weekly_move_pct)
+    volatility_desc = "low" if volatility_score < 3 else "moderate" if volatility_score < 7 else "high"
+    price_swing = round(weekly_move_pct * np.sqrt(2))  # typical move over two weeks
+
+    return {
+        'volatility_score': volatility_score,
+        'commodity': commodity,
+        'period': f'{len(series) - 1} weeks',
+        'volatility_analysis': (
+            f"{commodity} prices moved about {weekly_move_pct:.1f}% a week over the last {len(series) - 1} weekly reports, "
+            f"so a typical two-week swing is around ±{price_swing}%."
+        ),
+        'volatility_level': volatility_desc,
+        'expected_price_swing': price_swing
+    }
 
 # Alert Management Endpoints
 @app.get("/alerts/settings")

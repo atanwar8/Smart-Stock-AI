@@ -7,8 +7,7 @@ Additional methods for the forecaster class
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-from sklearn.preprocessing import StandardScaler
+from typing import Dict, List
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
@@ -28,413 +27,187 @@ except Exception as e:
     xgb = None  # Set to None for safe checking
 
 
-def create_features(df: pd.DataFrame, commodity: str = None, weather_data: Dict = None) -> pd.DataFrame:
-    """Create comprehensive feature set for ML models"""
-    df = df.copy()
-    
-    # Ensure report_date is datetime
-    if 'report_date' in df.columns:
-        df['report_date'] = pd.to_datetime(df['report_date'])
-        df = df.sort_values('report_date')
-    
-    # Time-based features
-    if 'report_date' in df.columns:
-        df['year'] = df['report_date'].dt.year
-        df['month'] = df['report_date'].dt.month
-        df['day'] = df['report_date'].dt.day
-        df['day_of_year'] = df['report_date'].dt.dayofyear
-        df['week_of_year'] = df['report_date'].dt.isocalendar().week
-        df['quarter'] = df['report_date'].dt.quarter
-        
-        # Cyclical encoding
-        df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
-        df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
-        df['day_sin'] = np.sin(2 * np.pi * df['day_of_year'] / 365)
-        df['day_cos'] = np.cos(2 * np.pi * df['day_of_year'] / 365)
-    
-    # Price-based features
-    if 'current_wtd_avg_price' in df.columns:
-        # Lag features
-        for lag in [1, 7, 14, 30]:
-            df[f'price_lag_{lag}'] = df['current_wtd_avg_price'].shift(lag)
-        
-        # Rolling statistics
-        for window in [7, 14, 30]:
-            df[f'price_rolling_mean_{window}'] = df['current_wtd_avg_price'].rolling(window=window).mean()
-            df[f'price_rolling_std_{window}'] = df['current_wtd_avg_price'].rolling(window=window).std()
-            df[f'price_rolling_min_{window}'] = df['current_wtd_avg_price'].rolling(window=window).min()
-            df[f'price_rolling_max_{window}'] = df['current_wtd_avg_price'].rolling(window=window).max()
-        
-        # Price change features
-        df['price_change_1d'] = df['current_wtd_avg_price'].pct_change(1)
-        df['price_change_7d'] = df['current_wtd_avg_price'].pct_change(7)
-        df['price_change_30d'] = df['current_wtd_avg_price'].pct_change(30)
-    
-    # Add weather features if available
-    if weather_data:
-        df = add_weather_features(df, weather_data, commodity)
-    
-    return df
+LAGS = (1, 2, 3, 4, 8, 13, 52)  # in weeks; USDA retail reports are weekly
+WEEK = pd.Timedelta(days=7)
+BAND_Z = 1.28  # ~80% band around the forecast
 
 
-def add_weather_features(df: pd.DataFrame, weather_data: Dict, commodity: str = None) -> pd.DataFrame:
-    """Add weather features to dataframe"""
-    # Current weather
-    df['current_temp'] = weather_data['current_temp']
-    df['current_humidity'] = weather_data['current_humidity']
-    
-    # Weather forecast features (if available)
-    if 'forecast' in weather_data and weather_data['forecast']:
-        forecast = weather_data['forecast']
-        
-        # Average forecast features
-        avg_temp = np.mean([day['temp_high'] for day in forecast[:7]])  # 7-day average
-        avg_humidity = np.mean([day['humidity'] for day in forecast[:7]])
-        
-        df['forecast_temp_7d'] = avg_temp
-        df['forecast_humidity_7d'] = avg_humidity
-        
-        # Temperature volatility
-        temp_std = np.std([day['temp_high'] for day in forecast[:7]])
-        df['temp_volatility_7d'] = temp_std
-        
-        # Weather condition encoding
-        conditions = [day['condition'] for day in forecast[:7]]
-        clear_days = sum(1 for c in conditions if 'clear' in c.lower())
-        df['clear_days_7d'] = clear_days / len(conditions)
-    
-    return df
+def weekly_prices(train_data: pd.DataFrame, commodity: str) -> pd.Series:
+    """One average price per weekly report, in the commodity's most common unit.
+
+    The USDA export repeats each week once per region, variety and package size
+    (e.g. tomatoes per lb and per pint), so raw rows are not a time series.
+    """
+    rows = train_data[train_data['commodity'] == commodity]
+    if 'unit' in rows.columns and rows['unit'].notna().any():
+        rows = rows[rows['unit'] == rows['unit'].mode().iloc[0]]
+    series = rows.groupby(pd.to_datetime(rows['report_date']))['current_wtd_avg_price'].mean()
+    return series.dropna().sort_index().rename('price')
 
 
-def prepare_model_data(df: pd.DataFrame, commodity: str, weather_data: Dict = None, is_training: bool = True) -> Tuple[pd.DataFrame, np.ndarray]:
-    """Prepare data for model training/prediction"""
-    # Filter for specific commodity
-    if 'commodity' in df.columns:
-        commodity_data = df[df['commodity'] == commodity].copy()
-    else:
-        commodity_data = df.copy()
-    
-    if len(commodity_data) == 0:
-        raise ValueError(f"No data found for commodity: {commodity}")
-    
-    # Create features
-    commodity_data = create_features(commodity_data, commodity, weather_data)
-    
-    # Define feature columns (exclude target and non-feature columns)
-    exclude_cols = ['report_date', 'commodity', 'variety', 'unit', 'environment', 
-                   'current_wtd_avg_price', 'region', 'class', 'organic',
-                   'price_min', 'price_max', 'current_ad_count', 
-                   'priorwk_ad_count', 'priorwk_wtd_avg_price',
-                   'prioryr_ad_count', 'prioryr_wtd_avg_price']
-    
-    feature_cols = [col for col in commodity_data.columns if col not in exclude_cols]
-    
-    # Handle missing values
-    commodity_data[feature_cols] = commodity_data[feature_cols].fillna(method='ffill').fillna(0)
-    
-    # Prepare features and target
-    X = commodity_data[feature_cols]
-    
-    if is_training and 'current_wtd_avg_price' in commodity_data.columns:
-        y = commodity_data['current_wtd_avg_price'].values
-        # Remove rows where target is missing
-        valid_idx = ~np.isnan(y)
-        X = X[valid_idx]
-        y = y[valid_idx]
-    else:
-        y = None
-    
-    return X, y
+def build_features(series: pd.Series) -> pd.DataFrame:
+    """Features for each week's price built only from earlier weeks, so nothing leaks from the target."""
+    past = series.shift(1)
+    features = pd.DataFrame(index=series.index)
+    for lag in LAGS:
+        features[f'lag_{lag}'] = series.shift(lag)
+    for window in (4, 13):
+        features[f'mean_{window}'] = past.rolling(window).mean()
+        features[f'std_{window}'] = past.rolling(window).std()
+    features['change_4'] = past / series.shift(5) - 1
+    week = series.index.isocalendar().week.to_numpy(dtype=float)
+    features['week_sin'] = np.sin(2 * np.pi * week / 52)
+    features['week_cos'] = np.cos(2 * np.pi * week / 52)
+    return features
+
+
+def _new_model(model_type: str):
+    if model_type == 'LightGBM' and LIGHTGBM_AVAILABLE:
+        return lgb.LGBMRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42, verbose=-1)
+    if model_type == 'XGBoost' and XGBOOST_AVAILABLE:
+        return xgb.XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42, verbosity=0)
+    from sklearn.ensemble import RandomForestRegressor
+    return RandomForestRegressor(n_estimators=100, max_depth=6, random_state=42)
 
 
 def train_model(forecaster, commodity: str, weather_data: Dict = None) -> Dict:
-    """Train XGBoost or LightGBM model"""
+    """Train a model that predicts next week's price change from past weeks.
+
+    Accuracy is measured with time-series cross-validation on price levels, next to a
+    naive "same as last week" baseline so the score can be judged honestly.
+    """
     if forecaster.train_data is None:
         raise ValueError("Training data not loaded")
-    
+
+    series = weekly_prices(forecaster.train_data, commodity)
+    features = build_features(series)
+    data = features.assign(price=series).dropna()
+    if len(data) < 60 or forecaster.model_type == 'Simple':
+        return train_simple_model(forecaster, commodity, series, weather_data)
+
     try:
-        # Prepare data
-        X, y = prepare_model_data(forecaster.train_data, commodity, weather_data, is_training=True)
-        
-        if len(X) < 50:  # Minimum data requirement
-            return train_simple_model(forecaster, commodity, forecaster.train_data[forecaster.train_data['commodity'] == commodity], weather_data)
-        
-        # Store feature names
-        forecaster.feature_names[commodity] = list(X.columns)
-        
-        # Scale features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-        forecaster.scalers[commodity] = scaler
-        
-        # Time series split for validation
-        tscv = TimeSeriesSplit(n_splits=3)
-        scores = []
-        
-        for train_idx, val_idx in tscv.split(X_scaled):
-            X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Train model
-            if forecaster.model_type == 'LightGBM' and LIGHTGBM_AVAILABLE:
-                model = lgb.LGBMRegressor(
-                    n_estimators=100,
-                    learning_rate=0.1,
-                    max_depth=6,
-                    random_state=42,
-                    verbose=-1
-                )
-            elif forecaster.model_type == 'XGBoost' and XGBOOST_AVAILABLE:
-                model = xgb.XGBRegressor(
-                    n_estimators=100,
-                    learning_rate=0.1,
-                    max_depth=6,
-                    random_state=42,
-                    verbosity=0
-                )
-            else:
-                from sklearn.ensemble import RandomForestRegressor
-                model = RandomForestRegressor(
-                    n_estimators=100,
-                    max_depth=6,
-                    random_state=42
-                )
-            
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_val)
-            
-            # Calculate metrics
-            mae = mean_absolute_error(y_val, y_pred)
-            rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-            r2 = r2_score(y_val, y_pred)
-            
-            scores.append({'mae': mae, 'rmse': rmse, 'r2': r2})
-        
-        # Train final model on all data
-        if forecaster.model_type == 'LightGBM' and LIGHTGBM_AVAILABLE:
-            final_model = lgb.LGBMRegressor(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=6,
-                random_state=42,
-                verbose=-1
-            )
-        elif forecaster.model_type == 'XGBoost' and XGBOOST_AVAILABLE:
-            final_model = xgb.XGBRegressor(
-                n_estimators=100,
-                learning_rate=0.1,
-                max_depth=6,
-                random_state=42,
-                verbosity=0
-            )
-        else:
-            from sklearn.ensemble import RandomForestRegressor
-            final_model = RandomForestRegressor(
-                n_estimators=100,
-                max_depth=6,
-                random_state=42
-            )
-        
-        final_model.fit(X_scaled, y)
-        
-        # Store model and performance
-        avg_scores = {
-            'mae': np.mean([s['mae'] for s in scores]),
-            'rmse': np.mean([s['rmse'] for s in scores]),
-            'r2': np.mean([s['r2'] for s in scores])
+        X = data[features.columns]
+        y = np.log(data['price'] / data['lag_1'])  # next-week log change
+        maes, rmses, r2s, naive_maes, residuals = [], [], [], [], []
+        for train_idx, val_idx in TimeSeriesSplit(n_splits=3).split(X):
+            model = _new_model(forecaster.model_type)
+            model.fit(X.iloc[train_idx], y.iloc[train_idx])
+            change = model.predict(X.iloc[val_idx])
+            actual = data['price'].iloc[val_idx].to_numpy()
+            last_week = data['lag_1'].iloc[val_idx].to_numpy()
+            predicted = last_week * np.exp(change)
+            maes.append(mean_absolute_error(actual, predicted))
+            rmses.append(np.sqrt(mean_squared_error(actual, predicted)))
+            r2s.append(r2_score(actual, predicted))
+            naive_maes.append(mean_absolute_error(actual, last_week))
+            residuals.extend(y.iloc[val_idx].to_numpy() - change)
+
+        final_model = _new_model(forecaster.model_type)
+        final_model.fit(X, y)
+
+        performance = {
+            'mae': float(np.mean(maes)),
+            'rmse': float(np.mean(rmses)),
+            'r2': float(np.mean(r2s)),
+            'naive_mae': float(np.mean(naive_maes)),
         }
-        
+        forecaster.feature_names[commodity] = list(X.columns)
         forecaster.models[commodity] = {
             'model': final_model,
             'type': forecaster.model_type,
-            'performance': avg_scores,
+            'performance': performance,
+            'weekly_change_std': float(np.std(residuals)),
             'trained_at': datetime.now()
         }
-        
-        forecaster.model_performance[commodity] = avg_scores
-        
-        print(f"✅ {commodity} model trained - R²: {avg_scores['r2']:.3f}, MAE: ${avg_scores['mae']:.3f}")
-        
+        forecaster.model_performance[commodity] = performance
+
+        print(f"✅ {commodity} model trained - R²: {performance['r2']:.3f}, MAE: ${performance['mae']:.3f} (naive ${performance['naive_mae']:.3f})")
         return {
             'success': True,
             'model_type': forecaster.model_type,
-            'performance': avg_scores,
-            'feature_count': len(forecaster.feature_names[commodity])
+            'performance': performance,
+            'feature_count': len(X.columns)
         }
-        
+
     except Exception as e:
         print(f"❌ Error training {commodity} model: {e}")
-        return train_simple_model(forecaster, commodity, forecaster.train_data[forecaster.train_data['commodity'] == commodity], weather_data)
+        return train_simple_model(forecaster, commodity, series, weather_data)
 
 
-def train_simple_model(forecaster, commodity: str, commodity_data: pd.DataFrame, weather_data: Dict) -> Dict:
-    """Train simple trend + seasonal model as fallback"""
-    try:
-        # Simple moving average with trend
-        if 'current_wtd_avg_price' in commodity_data.columns:
-            prices = commodity_data['current_wtd_avg_price'].dropna()
-            
-            if len(prices) > 0:
-                forecaster.models[commodity] = {
-                    'model': 'simple',
-                    'type': 'Simple Model',
-                    'mean_price': prices.mean(),
-                    'trend': (prices.iloc[-1] - prices.iloc[0]) / len(prices) if len(prices) > 1 else 0,
-                    'performance': {'mae': prices.std(), 'rmse': prices.std(), 'r2': 0.5},
-                    'trained_at': datetime.now()
-                }
-                
-                return {'success': True, 'model_type': 'Simple Model', 'performance': {'r2': 0.5}}
-        
+def train_simple_model(forecaster, commodity: str, series: pd.Series, weather_data: Dict) -> Dict:
+    """Fallback when there's too little history: forecast last week's price, scored as such."""
+    if len(series) < 2:
         return {'success': False, 'error': 'Insufficient data'}
-        
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+
+    actual, last_week = series.iloc[1:].to_numpy(), series.iloc[:-1].to_numpy()
+    performance = {
+        'mae': float(mean_absolute_error(actual, last_week)),
+        'rmse': float(np.sqrt(mean_squared_error(actual, last_week))),
+        'r2': float(r2_score(actual, last_week)) if len(actual) > 1 else 0.0,
+    }
+    performance['naive_mae'] = performance['mae']
+    forecaster.models[commodity] = {
+        'model': 'simple',
+        'type': 'Simple Model',
+        'performance': performance,
+        'weekly_change_std': float(np.std(np.diff(np.log(series.to_numpy())))),
+        'trained_at': datetime.now()
+    }
+    forecaster.model_performance[commodity] = performance
+    return {'success': True, 'model_type': 'Simple Model', 'performance': performance}
+
+
+def _forecast_weeks(model, series: pd.Series, weeks: int) -> List[float]:
+    """Predict week by week, feeding each prediction back in as history."""
+    history = series.copy()
+    prices = []
+    for _ in range(weeks):
+        next_week = history.index[-1] + WEEK
+        extended = pd.concat([history, pd.Series([np.nan], index=[next_week])])
+        change = model.predict(build_features(extended).iloc[[-1]])[0]
+        price = float(history.iloc[-1] * np.exp(change))
+        history = pd.concat([history, pd.Series([price], index=[next_week])])
+        prices.append(price)
+    return prices
 
 
 def predict_with_model(forecaster, commodity: str, days_ahead: int, weather_data: Dict) -> Dict:
-    """Generate predictions using trained model"""
+    """Daily price forecast for the next `days_ahead` days after the latest USDA report."""
     if commodity not in forecaster.models:
         return {'error': f'No model trained for {commodity}'}
-    
-    model_info = forecaster.models[commodity]
-    
-    # Get recent data for prediction
     if forecaster.train_data is None:
         return {'error': 'Training data not available'}
-    
-    commodity_data = forecaster.train_data[forecaster.train_data['commodity'] == commodity].copy()
-    
-    if len(commodity_data) == 0:
+
+    series = weekly_prices(forecaster.train_data, commodity)
+    if series.empty:
         return {'error': f'No data available for {commodity}'}
-    
-    # Sort by date and get recent data
-    commodity_data = commodity_data.sort_values('report_date')
-    recent_data = commodity_data.tail(60)  # Use last 60 days for context
-    
-    try:
-        if model_info['type'] in ['LightGBM', 'XGBoost', 'RandomForest']:
-            return predict_with_ml(forecaster, commodity, days_ahead, weather_data, model_info, recent_data)
-        else:
-            return predict_with_simple_model(forecaster, commodity, days_ahead, weather_data, model_info, recent_data)
-            
-    except Exception as e:
-        print(f"Prediction error for {commodity}: {e}")
-        return predict_with_simple_model(forecaster, commodity, days_ahead, weather_data, model_info, recent_data)
 
+    model_info = forecaster.models[commodity]
+    weeks = int(np.ceil(days_ahead / 7))
+    last_price = float(series.iloc[-1])
+    if model_info['type'] == 'Simple Model':
+        weekly = [last_price] * weeks
+    else:
+        weekly = _forecast_weeks(model_info['model'], series, weeks)
 
-def predict_with_ml(forecaster, commodity: str, days_ahead: int, weather_data: Dict, model_info: Dict, recent_data: pd.DataFrame) -> Dict:
-    """Generate predictions using XGBoost/LightGBM"""
-    model = model_info['model']
-    scaler = forecaster.scalers[commodity]
-    feature_names = forecaster.feature_names[commodity]
-    
-    # Create future dates
-    last_date = recent_data['report_date'].max()
-    future_dates = [last_date + timedelta(days=i+1) for i in range(days_ahead)]
-    
-    predictions = []
-    confidence_upper = []
-    confidence_lower = []
-    
-    # Get last known price for context
-    last_price = recent_data['current_wtd_avg_price'].iloc[-1]
-    
-    for i, future_date in enumerate(future_dates):
-        # Create a row for prediction
-        pred_row = pd.DataFrame({
-            'report_date': [future_date],
-            'commodity': [commodity],
-            'current_wtd_avg_price': [last_price]  # Will be excluded from features
-        })
-        
-        # Create features
-        pred_features = create_features(pred_row, commodity, weather_data)
-        
-        # Ensure all required features are present
-        for feature in feature_names:
-            if feature not in pred_features.columns:
-                pred_features[feature] = 0
-        
-        # Select and order features
-        X_pred = pred_features[feature_names].fillna(0)
-        X_pred_scaled = scaler.transform(X_pred)
-        
-        # Make prediction
-        pred_price = model.predict(X_pred_scaled)[0]
-        
-        # Add some uncertainty based on model performance
-        mae = model_info['performance']['mae']
-        uncertainty = mae * (1 + i * 0.1)  # Increasing uncertainty over time
-        
-        predictions.append(float(max(0.1, pred_price)))  # Ensure positive prices and convert to Python float
-        confidence_upper.append(float(max(0.1, pred_price + uncertainty)))
-        confidence_lower.append(float(max(0.1, pred_price - uncertainty)))
-        
-        # Update last_price for next iteration
-        last_price = pred_price
-    
-    # Calculate additional metrics
-    price_volatility = float(np.std(predictions) / np.mean(predictions)) if predictions else 0.0
-    avg_price = float(np.mean(predictions)) if predictions else 0.0
-    
-    # Weather impact analysis
-    weather_impact = calculate_weather_impact(commodity, weather_data)
-    
+    # Weekly forecasts → one price per day, interpolated from the latest report
+    days = np.arange(1, days_ahead + 1)
+    predictions = np.interp(days, np.arange(0, 7 * weeks + 1, 7), [last_price] + weekly)
+    spread = BAND_Z * model_info['weekly_change_std'] * np.sqrt(days / 7)
+    last_date = series.index[-1]
+
     return {
         'commodity': commodity,
         'model_type': model_info['type'],
-        'predictions': predictions,
-        'confidence_upper': confidence_upper,
-        'confidence_lower': confidence_lower,
-        'dates': [date.strftime('%Y-%m-%d') for date in future_dates],
-        'volatility': price_volatility,
-        'average_price': avg_price,
-        'weather_impact': weather_impact,
-        'performance': model_info['performance'],
-        'feature_importance': get_feature_importance(forecaster, commodity)
-    }
-
-
-def predict_with_simple_model(forecaster, commodity: str, days_ahead: int, weather_data: Dict, model_info: Dict, recent_data: pd.DataFrame) -> Dict:
-    """Generate predictions using simple model"""
-    if 'mean_price' not in model_info:
-        return {'error': 'Simple model not properly configured'}
-    
-    mean_price = model_info['mean_price']
-    trend = model_info.get('trend', 0)
-    
-    # Generate simple predictions
-    predictions = []
-    future_dates = []
-    last_date = recent_data['report_date'].max()
-    
-    for i in range(days_ahead):
-        future_date = last_date + timedelta(days=i+1)
-        future_dates.append(future_date.strftime('%Y-%m-%d'))
-        
-        # Simple trend + seasonal + random variation
-        seasonal_factor = np.sin(2 * np.pi * future_date.timetuple().tm_yday / 365) * 0.1
-        predicted_price = mean_price + (trend * i) + (seasonal_factor * mean_price) + np.random.normal(0, mean_price * 0.05)
-        
-        predictions.append(float(max(0.1, predicted_price)))
-    
-    # Simple confidence intervals
-    uncertainty = float(mean_price * 0.15)  # 15% uncertainty
-    confidence_upper = [float(p + uncertainty) for p in predictions]
-    confidence_lower = [float(max(0.1, p - uncertainty)) for p in predictions]
-    
-    return {
-        'commodity': commodity,
-        'model_type': 'Simple Model',
-        'predictions': predictions,
-        'confidence_upper': confidence_upper,
-        'confidence_lower': confidence_lower,
-        'dates': future_dates,
+        'predictions': [float(p) for p in predictions],
+        'confidence_upper': [float(p * np.exp(s)) for p, s in zip(predictions, spread)],
+        'confidence_lower': [float(p * np.exp(-s)) for p, s in zip(predictions, spread)],
+        'dates': [(last_date + timedelta(days=int(d))).strftime('%Y-%m-%d') for d in days],
         'volatility': float(np.std(predictions) / np.mean(predictions)),
         'average_price': float(np.mean(predictions)),
         'weather_impact': calculate_weather_impact(commodity, weather_data),
-        'performance': model_info['performance']
+        'performance': model_info['performance'],
+        'feature_importance': get_feature_importance(forecaster, commodity)
     }
 
 
