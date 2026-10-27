@@ -404,6 +404,9 @@ class ChartDataResponse(BaseModel):
     layout: Dict
     config: Dict
 
+# Keeps a reference to background startup work so it isn't garbage-collected mid-run
+startup_tasks = set()
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the forecaster on startup"""
@@ -428,8 +431,13 @@ async def startup_event():
         ]:
             inventory_manager.update_inventory(ingredient, stock, usage, capacity)
 
-    # Train every commodity's model in the background so the first page views are fast
-    if success and os.getenv('PRETRAIN_MODELS', '1') == '1':
+    # With a USDA key, pull new weeks first (the bundled CSV is all a fresh container has), then train
+    if success and os.getenv('MARS_API_KEY') and os.getenv('REFRESH_ON_STARTUP', '1') == '1':
+        task = asyncio.create_task(refresh_on_startup())
+        startup_tasks.add(task)
+        task.add_done_callback(startup_tasks.discard)
+    # Otherwise train every commodity's model in the background so the first page views are fast
+    elif success and os.getenv('PRETRAIN_MODELS', '1') == '1':
         def pretrain():
             weather_data = forecaster.get_weather_data('CA', '90210', 30)
             for commodity in list(forecaster.viable_commodities):
@@ -470,7 +478,8 @@ async def health_check():
         "viable_commodities": len(forecaster.viable_commodities) if forecaster else 0,
         "training_rows": int(len(forecaster.train_data)) if forecaster is not None and forecaster.train_data is not None else 0,
         "latest_data_date": _latest_report_date(),
-        "usda_api_configured": bool(os.getenv('MARS_API_KEY'))
+        "usda_api_configured": bool(os.getenv('MARS_API_KEY')),
+        "data_refresh_running": scrape_lock.locked()
     }
 
 def _latest_report_date() -> Optional[str]:
@@ -1737,8 +1746,8 @@ async def get_recent_alerts():
 
 # ==================== SCRAPE AND TRAIN ENDPOINT ====================
 
-async def refresh_and_retrain():
-    """Pull new weekly USDA reports through the MyMarketNews API, then retrain every model"""
+async def pull_usda_data():
+    """Fetch new weekly USDA reports into the training CSV. Returns (success, message, rows added)."""
     try:
         print("🌽 Requesting new weekly reports from the USDA MyMarketNews API...")
         result = await asyncio.to_thread(
@@ -1746,13 +1755,13 @@ async def refresh_and_retrain():
         )
     except usda_api.MissingApiKey:
         return False, ("Data refresh needs a free USDA MyMarketNews API key. Create one at mymarketnews.ams.usda.gov "
-                       "(My Profile, API Key) and set it as MARS_API_KEY in the service's environment.")
+                       "(My Profile, API Key) and set it as MARS_API_KEY in the service's environment."), 0
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code in (401, 403):
-            return False, "USDA rejected the API key. Check that MARS_API_KEY matches the key in your MyMarketNews profile."
-        return False, f"USDA's API returned an error: {e}"
+            return False, "USDA rejected the API key. Check that MARS_API_KEY matches the key in your MyMarketNews profile.", 0
+        return False, f"USDA's API returned an error: {e}", 0
     except requests.RequestException as e:
-        return False, f"Couldn't reach USDA's API: {e}"
+        return False, f"Couldn't reach USDA's API: {e}", 0
 
     latest, added, empty = result['latest'], result['rows_added'], result['empty_commodities']
     missing = f" No rows came back for {', '.join(empty)}." if empty else ""
@@ -1761,19 +1770,44 @@ async def refresh_and_retrain():
     if added <= 0:
         days_old = (datetime.now().date() - datetime.fromisoformat(latest).date()).days
         if days_old <= 10:
-            return True, f"Already up to date: the newest report is from {latest}.{missing}"
-        return False, f"USDA returned no new rows; the newest report is still {latest}.{missing}"
+            return True, f"Already up to date: the newest report is from {latest}.{missing}", 0
+        return False, f"USDA returned no new rows; the newest report is still {latest}.{missing}", 0
+    return True, f"Added {added} new rows through {latest}.{missing}", added
 
-    forecaster.load_training_data(TRAIN_DATA_PATH)
-    retrained = 0
-    for commodity in forecaster.viable_commodities:
+
+def train_all_models() -> int:
+    """(Re)train every commodity's model on the current training data. Returns how many trained."""
+    trained = 0
+    for commodity in list(forecaster.viable_commodities):
         try:
             forecaster_utils.train_model(forecaster, commodity)
-            retrained += 1
+            trained += 1
         except Exception as e:
-            print(f"⚠️ Failed to retrain {commodity}: {e}")
-    print(f"🎯 Retrained {retrained}/{len(forecaster.viable_commodities)} models")
-    return True, f"Added {added} new rows through {latest} and retrained {retrained} models.{missing}"
+            print(f"⚠️ Training {commodity} failed: {e}")
+    print(f"🎯 Trained {trained}/{len(forecaster.viable_commodities)} models")
+    return trained
+
+
+async def refresh_and_retrain():
+    """Pull new weekly USDA reports, then retrain every model if anything was added"""
+    success, message, added = await pull_usda_data()
+    if added > 0:
+        forecaster.load_training_data(TRAIN_DATA_PATH)
+        retrained = await asyncio.to_thread(train_all_models)
+        message = f"{message} Retrained {retrained} models."
+    return success, message
+
+
+async def refresh_on_startup():
+    """Render's disk resets on every restart, so pull the weeks published since the bundled CSV, then train"""
+    async with scrape_lock:
+        try:
+            _, message = await refresh_and_retrain()
+        except Exception as e:  # a refresh problem must never leave the server without models
+            message = f"failed: {e}"
+        print(f"🌽 Startup refresh: {message}")
+        if os.getenv('PRETRAIN_MODELS', '1') == '1' and len(forecaster.models) < len(forecaster.viable_commodities):
+            await asyncio.to_thread(train_all_models)
 
 # One refresh at a time: each run calls USDA for every commodity and retrains every model
 scrape_lock = asyncio.Lock()

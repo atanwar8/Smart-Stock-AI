@@ -4,6 +4,10 @@ import os
 
 os.environ["PRETRAIN_MODELS"] = "0"
 os.environ["SEED_DEMO_INVENTORY"] = "1"
+os.environ["REFRESH_ON_STARTUP"] = "0"
+
+import time
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -92,3 +96,20 @@ def test_refresh_that_adds_rows_retrains_the_models(client, monkeypatch):
     assert body["success"] is True
     assert "Added 42 new rows through 2026-10-23" in body["message"]
     assert client.get("/api/health").json()["models_trained"] == 10
+
+
+def test_server_pulls_usda_data_when_it_starts(monkeypatch):
+    # Render's disk resets on every restart, so a server with a key fetches new weeks at boot
+    calls = []
+    monkeypatch.setenv("MARS_API_KEY", "test-key")
+    monkeypatch.setenv("REFRESH_ON_STARTUP", "1")
+    monkeypatch.setattr(main.usda_api, "refresh_training_data",
+                        lambda *a, **k: calls.append(a) or {"rows_added": 0, "latest": date.today().isoformat(), "empty_commodities": []})
+
+    with TestClient(main.app) as c:
+        for _ in range(100):
+            if calls and not c.get("/api/health").json()["data_refresh_running"]:
+                break
+            time.sleep(0.05)
+
+    assert len(calls) == 1
