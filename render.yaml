@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free # sleeps after 15 idle minutes (~1 min to wake); "starter" stays awake
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: checksPass # deploy main only after GitHub CI passes
     envVars:
       - key: OPENWEATHER_API_KEY
         sync: false # set in the dashboard; without it the app uses sample weather

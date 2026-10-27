@@ -1,0 +1,24 @@
+# One pull request per outdated dependency, each checked by CI before you merge it
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /smartstock-nextjs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
