@@ -68,3 +68,14 @@ def test_commodities_report_the_unit_prices_are_quoted_in(client):
     units = client.get("/api/commodities").json()["units"]
     assert units["Tomatoes"] == "per lb"
     assert units["Lettuce"] == "each"
+
+
+def test_refresh_that_adds_no_rows_is_reported_honestly(client, monkeypatch):
+    # The scraper "succeeds" (exit 0) without writing anything, as it did against today's USDA site
+    finished = type("Finished", (), {"returncode": 0, "stdout": "no reports found", "stderr": ""})()
+    monkeypatch.setattr(main.subprocess, "run", lambda *args, **kwargs: finished)
+
+    body = client.post("/api/scrape-and-train").json()
+
+    assert body["success"] is False
+    assert "no new rows" in body["error"]

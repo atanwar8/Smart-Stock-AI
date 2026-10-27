@@ -1755,19 +1755,22 @@ async def run_scraper_and_train():
             print(f"❌ Scraper failed: {scraper_stderr}")
             return False, f"Scraper failed: {scraper_stderr}"
         
-        print("✅ Scraping completed successfully!")
-        print("🔄 Processing scraped data and adding to training set...")
-        
-        # The scraper already runs data_processor.py automatically, so new data is already in Example_Train.csv
-        print("✅ New data added to training set!")
-        print("🎯 Simple and effective approach:")
-        print("   📚 All new data added to training set")
-        print("   🎯 Time series cross-validation ensures robust performance")
-        
-        print("🔄 Reloading data and retraining models...")
-        
-        # Reload the training data in the forecaster
+        print("✅ Scraper finished, reloading the training data...")
+
+        # The scraper runs data_processor.py itself, which appends to Example_Train.csv.
+        # Exit code 0 doesn't mean it found anything, so compare the data before and after.
+        rows_before = len(forecaster.train_data) if forecaster.train_data is not None else 0
         forecaster.load_training_data(TRAIN_DATA_PATH)
+        rows_added = len(forecaster.train_data) - rows_before
+        latest = _latest_report_date()
+        if rows_added <= 0:
+            output = (scraper_process.stdout or '').strip().splitlines()[-5:] + (scraper_stderr or '').strip().splitlines()[-5:]
+            print("⚠️ Scraper added no rows. Last output:\n" + "\n".join(output))
+            return False, (
+                f"The scraper finished but added no new rows; the newest report is still {latest}. "
+                "USDA Market News may have changed its pages. The service logs show the scraper's output."
+            )
+        print(f"✅ Added {rows_added} rows (newest report {latest}). Retraining models...")
         
         # Get the available commodities
         viable_commodities = forecaster.viable_commodities
@@ -1799,7 +1802,7 @@ async def run_scraper_and_train():
         # Update KPI metrics with new model performance
         print("📊 Updating KPI metrics...")
         
-        return True, f"Successfully scraped new data and retrained {retrained_count} models"
+        return True, f"Added {rows_added} new rows (newest report {latest}) and retrained {retrained_count} models"
         
     except Exception as e:
         print(f"❌ Error in scrape and train process: {e}")
