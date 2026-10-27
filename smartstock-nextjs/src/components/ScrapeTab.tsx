@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Check, Chrome, DatabaseZap, Globe, Loader2, X } from 'lucide-react';
+import { Check, DatabaseZap, Globe, KeyRound, Loader2, X } from 'lucide-react';
 import { postJSON } from '@/lib/api';
 import type { Health } from '@/lib/types';
 import { Button, Card, CardHeader, PageHeader, Pill, cx } from './ui';
@@ -11,10 +11,9 @@ type RunState = 'idle' | 'running' | 'done' | 'failed';
 // What POST /scrape-and-train does, in order. The API answers once at the end,
 // so steps show as a single running block rather than fake per-step progress.
 const STEPS = [
-  { title: 'Open USDA Market News', detail: 'Headless Chrome loads the retail vegetables report' },
-  { title: 'Download new reports', detail: 'Everything after the latest date already in the training set' },
-  { title: 'Add them to the training set', detail: 'Cleaned, de-duplicated and appended to Example_Train.csv' },
-  { title: 'Retrain every model', detail: 'XGBoost / LightGBM per commodity, time-series cross-validated' },
+  { title: 'Ask USDA for new weekly reports', detail: 'MyMarketNews API, report 3324, everything since the newest stored week' },
+  { title: 'Add them to the training set', detail: 'Mapped to the training columns; re-published rows replace stored ones' },
+  { title: 'Retrain every model', detail: 'One LightGBM model per vegetable, scored against last week’s price' },
 ];
 
 const formatDate = (iso?: string | null) =>
@@ -55,6 +54,7 @@ export default function ScrapeTab({ health }: { health?: Health }) {
 
   const age = daysSince(health?.latest_data_date);
   const stale = age !== undefined && age > 14;
+  const needsKey = health !== undefined && health.usda_api_configured === false;
 
   return (
     <>
@@ -68,7 +68,7 @@ export default function ScrapeTab({ health }: { health?: Health }) {
           </>
         }
         actions={
-          <Button variant="primary" icon={DatabaseZap} onClick={run} loading={state === 'running'}>
+          <Button variant="primary" icon={DatabaseZap} onClick={run} loading={state === 'running'} disabled={needsKey}>
             {state === 'running' ? 'Refreshing…' : 'Pull latest prices'}
           </Button>
         }
@@ -77,16 +77,19 @@ export default function ScrapeTab({ health }: { health?: Health }) {
       <div className="grid gap-4 lg:grid-cols-3">
         {/* Source */}
         <Card>
-          <CardHeader title="Source" action={<Pill tone={stale ? 'warn' : 'good'}>{stale ? 'Behind' : 'Up to date'}</Pill>} />
+          <CardHeader
+            title="Source"
+            action={<Pill tone={needsKey || stale ? 'warn' : 'good'}>{needsKey ? 'Needs API key' : stale ? 'Behind' : 'Up to date'}</Pill>}
+          />
           <div className="px-5 pb-5">
             <div className="flex items-center gap-3">
               <span className="flex h-11 w-11 items-center justify-center rounded-[12px] bg-[#e6ecf7] text-info">
                 <Globe className="h-5 w-5" />
               </span>
               <div>
-                <div className="text-[15px] font-semibold">USDA Market News</div>
-                <a href="https://mymarketnews.ams.usda.gov/public_data" target="_blank" rel="noreferrer" className="text-[12.5px] text-muted underline decoration-line-2 underline-offset-2 hover:text-ink">
-                  mymarketnews.ams.usda.gov
+                <div className="text-[15px] font-semibold">USDA MyMarketNews</div>
+                <a href="https://mymarketnews.ams.usda.gov/viewReport/3324" target="_blank" rel="noreferrer" className="text-[12.5px] text-muted underline decoration-line-2 underline-offset-2 hover:text-ink">
+                  National Retail Report, Specialty Crops
                 </a>
               </div>
             </div>
@@ -96,10 +99,18 @@ export default function ScrapeTab({ health }: { health?: Health }) {
               <Fact label="Models trained" value={health ? `${health.models_trained} of ${health.viable_commodities}` : '—'} />
               <Fact label="Last refresh here" value={finishedAt ? finishedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'Not this session'} />
             </dl>
-            <div className="mt-5 flex gap-3 rounded-tile bg-surface-2 p-3.5 text-[12.5px] leading-relaxed text-muted">
-              <Chrome className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>The scraper drives Chrome. The Docker image ships Chromium; on a Mac it needs Chrome plus <code className="rounded bg-well px-1">brew install chromedriver</code>.</p>
-            </div>
+            {needsKey && (
+              <div className="mt-5 flex gap-3 rounded-tile border border-[#d99a1e]/30 bg-[#d99a1e]/10 p-3.5 text-[12.5px] leading-relaxed text-warn">
+                <KeyRound className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  Data refresh needs a free USDA API key. Create one at{' '}
+                  <a href="https://mymarketnews.ams.usda.gov" target="_blank" rel="noreferrer" className="font-semibold underline underline-offset-2">
+                    mymarketnews.ams.usda.gov
+                  </a>{' '}
+                  (My Profile, API Key), then add it as <code className="rounded bg-white/60 px-1">MARS_API_KEY</code> in the server&apos;s environment.
+                </p>
+              </div>
+            )}
           </div>
         </Card>
 
@@ -107,7 +118,7 @@ export default function ScrapeTab({ health }: { health?: Health }) {
         <Card className="lg:col-span-2">
           <CardHeader
             title="Refresh run"
-            subtitle={state === 'idle' ? 'What happens when you pull the latest prices.' : state === 'running' ? `Running for ${elapsed}s. This usually takes a few minutes.` : state === 'done' ? `Finished in ${elapsed}s.` : `Stopped after ${elapsed}s.`}
+            subtitle={state === 'idle' ? 'What happens when you pull the latest prices.' : state === 'running' ? `Running for ${elapsed}s. This usually takes under a minute.` : state === 'done' ? `Finished in ${elapsed}s.` : `Stopped after ${elapsed}s.`}
             action={state !== 'idle' && <Pill tone={state === 'running' ? 'info' : state === 'done' ? 'good' : 'bad'}>{state === 'running' ? 'Running' : state === 'done' ? 'Succeeded' : 'Failed'}</Pill>}
           />
           <ol className="relative px-5 pb-2">

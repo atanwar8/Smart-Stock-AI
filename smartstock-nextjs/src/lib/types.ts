@@ -7,6 +7,7 @@ export interface Health {
   viable_commodities: number;
   training_rows?: number;
   latest_data_date?: string | null;
+  usda_api_configured?: boolean;
 }
 
 export interface Commodities {
