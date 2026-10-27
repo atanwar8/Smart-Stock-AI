@@ -31,7 +31,7 @@ flowchart LR
     O -->|orders, alerts| UI[Dashboard<br/>smartstock-nextjs]
 ```
 
-- **Data agent** (`backend/core/usda_api.py`) asks USDA's MyMarketNews API for every weekly National Retail Report (report 3324) since the newest week in `Example_Train.csv`, maps the rows to the training columns, and appends them. It re-requests the newest stored week, so corrections USDA publishes replace the old rows.
+- **Data agent** (`backend/core/usda_api.py`) asks USDA's MyMarketNews API for every weekly National Retail Report (report 3324) since the newest week in `Example_Train.csv`, maps the rows to the training columns, and appends them. It re-requests the newest stored week, so corrections USDA publishes replace the old rows. It runs every time the server starts, because a fresh container only has the CSV from the repo ([ADR-004](docs/decisions/ADR-004-refresh-usda-data-on-startup.md)).
 - **Forecast agent** (`backend/core/forecaster_utils.py`) turns each vegetable's rows into one weekly price series in its usual unit (per lb, each, per bunch...). It trains a LightGBM model on past weeks only, then forecasts week by week from the latest real price.
 - **Ordering and alerts agent** (`backend/main.py`) combines the stock you log, each item's shelf life and the forecasts into order recommendations and running-out, spoilage and price-move alerts.
 
@@ -65,6 +65,7 @@ Copy `backend/.env.template` to `backend/.env` for local runs, or set these in t
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `MARS_API_KEY` | none | Free USDA MyMarketNews API key ([sign up](https://mymarketnews.ams.usda.gov), then My Profile, API Key). **Data refresh** needs it. |
+| `REFRESH_ON_STARTUP` | `1` | With a key set, pull new USDA weeks every time the server starts, then train the models. |
 | `OPENWEATHER_API_KEY` | none | Live weather. Without it the app uses sample weather data. |
 | `SEED_DEMO_INVENTORY` | `1` | Starts with four tracked items so the dashboard isn't empty. Set `0` to start blank. |
 | `PRETRAIN_MODELS` | `1` | Trains every vegetable's model in the background at startup. |
@@ -109,6 +110,7 @@ start.sh               One-command local run
 - Inventory, alert settings and trained models live in memory, so they reset on restart or redeploy.
 - The free Render plan sleeps after 15 idle minutes and takes about a minute to wake.
 - **Data refresh** needs `MARS_API_KEY`; without it the button is disabled and the page says how to get one. Only one refresh runs at a time.
+- Prices pulled from USDA are saved on the server's temporary disk, not in the repo. After each restart (including waking from sleep) the server downloads them again, so for the first minute or so charts show data up to the CSV in the repo.
 - Order recommendations count stock in pounds, but some vegetables are priced per head or per bunch, so order cost for those is approximate.
 - The dashboard's cost-savings KPI from the original backend is a placeholder and isn't shown.
 - `Latest_App_Streamlit.py`, `train_test_updater.py` and `backend/start_backend.py` are from the original Streamlit version and aren't used by the dashboard. The original Selenium scraper was replaced by the USDA API client ([ADR-003](docs/decisions/ADR-003-usda-api-instead-of-browser-scraping.md)).
