@@ -2,6 +2,8 @@
 
 Produce price forecasting and smart ordering for restaurants. SmartStock learns weekly USDA retail prices for ten vegetables, forecasts where each price is heading, and tells a kitchen how much to order and when, based on what's in the walk-in, how fast it's used, and how long it keeps.
 
+**Live demo:** https://smartstock-ai-d6v1.onrender.com (free plan, so the first visit after a quiet spell takes about a minute to wake)
+
 [![CI](https://github.com/atanwar8/Smart-Stock-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/atanwar8/Smart-Stock-AI/actions/workflows/ci.yml)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/atanwar8/Smart-Stock-AI)
 
@@ -53,7 +55,7 @@ In production the dashboard and the API share one origin: the UI calls `/api/...
 
 ## Deploying
 
-`render.yaml` defines one Docker web service on Render's free plan. After the first deploy, every push to `main` runs CI on GitHub, and Render deploys only if every check passes (`autoDeployTrigger: checksPass`).
+`render.yaml` defines one Docker web service on Render's free plan. Every push to `main` runs CI on GitHub. Services created from the blueprint (the button above) deploy only after every check passes (`autoDeployTrigger: checksPass`). For a service created another way, set **Settings → Build & Deploy → Auto-Deploy** to **After CI Checks Pass** in the Render dashboard to get the same behavior.
 
 [ADR-001](docs/decisions/ADR-001-single-container-on-render.md) explains why this ships as one container on Render.
 
