@@ -55,6 +55,8 @@ export default function ScrapeTab({ health }: { health?: Health }) {
   const age = daysSince(health?.latest_data_date);
   const stale = age !== undefined && age > 14;
   const needsKey = health !== undefined && health.usda_api_configured === false;
+  // The server also refreshes on its own every time it starts
+  const serverRefreshing = state !== 'running' && health?.data_refresh_running === true;
 
   return (
     <>
@@ -68,8 +70,8 @@ export default function ScrapeTab({ health }: { health?: Health }) {
           </>
         }
         actions={
-          <Button variant="primary" icon={DatabaseZap} onClick={run} loading={state === 'running'} disabled={needsKey}>
-            {state === 'running' ? 'Refreshing…' : 'Pull latest prices'}
+          <Button variant="primary" icon={DatabaseZap} onClick={run} loading={state === 'running' || serverRefreshing} disabled={needsKey}>
+            {state === 'running' || serverRefreshing ? 'Refreshing…' : 'Pull latest prices'}
           </Button>
         }
       />
@@ -118,12 +120,12 @@ export default function ScrapeTab({ health }: { health?: Health }) {
         <Card className="lg:col-span-2">
           <CardHeader
             title="Refresh run"
-            subtitle={state === 'idle' ? 'What happens when you pull the latest prices.' : state === 'running' ? `Running for ${elapsed}s. This usually takes under a minute.` : state === 'done' ? `Finished in ${elapsed}s.` : `Stopped after ${elapsed}s.`}
-            action={state !== 'idle' && <Pill tone={state === 'running' ? 'info' : state === 'done' ? 'good' : 'bad'}>{state === 'running' ? 'Running' : state === 'done' ? 'Succeeded' : 'Failed'}</Pill>}
+            subtitle={serverRefreshing ? 'The server pulls the latest USDA reports every time it starts. This one is running now.' : state === 'idle' ? 'What happens when you pull the latest prices. It also runs every time the server starts.' : state === 'running' ? `Running for ${elapsed}s. This usually takes under a minute.` : state === 'done' ? `Finished in ${elapsed}s.` : `Stopped after ${elapsed}s.`}
+            action={serverRefreshing ? <Pill tone="info">Running</Pill> : state !== 'idle' && <Pill tone={state === 'running' ? 'info' : state === 'done' ? 'good' : 'bad'}>{state === 'running' ? 'Running' : state === 'done' ? 'Succeeded' : 'Failed'}</Pill>}
           />
           <ol className="relative px-5 pb-2">
             {STEPS.map((step, i) => {
-              const status = state === 'done' ? 'done' : state === 'failed' ? 'failed' : state === 'running' ? 'running' : 'pending';
+              const status = state === 'done' ? 'done' : state === 'failed' ? 'failed' : state === 'running' || serverRefreshing ? 'running' : 'pending';
               return (
                 <li key={step.title} className="relative flex gap-4 pb-5 last:pb-3">
                   {i < STEPS.length - 1 && <span className={cx('absolute left-[15px] top-8 h-[calc(100%-24px)] w-0.5', status === 'done' ? 'bg-primary/50' : 'bg-line')} aria-hidden="true" />}

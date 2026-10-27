@@ -8,6 +8,7 @@ export interface Health {
   training_rows?: number;
   latest_data_date?: string | null;
   usda_api_configured?: boolean;
+  data_refresh_running?: boolean; // e.g. the automatic refresh after a server restart
 }
 
 export interface Commodities {
