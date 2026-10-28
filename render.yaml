@@ -11,8 +11,6 @@ services:
     envVars:
       - key: MARS_API_KEY
         sync: false # free USDA MyMarketNews key; Data refresh needs it
-      - key: OPENWEATHER_API_KEY
-        sync: false # set in the dashboard; without it the app uses sample weather
       - key: SEED_DEMO_INVENTORY
         value: "1"
       - key: PRETRAIN_MODELS
