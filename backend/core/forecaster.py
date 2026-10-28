@@ -7,6 +7,7 @@ Extracted from Streamlit app for API backend
 import pandas as pd
 import numpy as np
 import os
+import time
 from datetime import datetime, timedelta
 import requests
 import warnings
@@ -15,6 +16,10 @@ import joblib
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from core import open_meteo
+
+WEATHER_CACHE_SECONDS = 30 * 60  # one Open-Meteo fetch per ZIP per half hour
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -51,7 +56,7 @@ except ImportError as e:
 class XGBoostLightGBMForecaster:
     """Forecasting system using XGBoost/LightGBM with weather integration"""
     
-    def __init__(self, weather_api_key: str = None, model_type: str = 'auto'):
+    def __init__(self, model_type: str = 'auto'):
         self.models = {}
         self.scalers = {}
         self.label_encoders = {}
@@ -60,9 +65,8 @@ class XGBoostLightGBMForecaster:
         self.train_data = None
         self.viable_commodities = []
         self.commodity_mapping = {}
-        self.weather_api_key = weather_api_key or os.getenv('OPENWEATHER_API_KEY')
-        self.weather_cache = {}  # Cache for weather data
-        self._weather_errors_logged = set()  # OpenWeather status codes already reported
+        self.weather_cache = {}  # ZIP -> (fetched_at, 16-day Open-Meteo weather)
+        self._weather_errors_logged = set()  # (ZIP, error) pairs already reported
         
         # Determine best available model type
         if model_type == 'auto':
@@ -86,10 +90,6 @@ class XGBoostLightGBMForecaster:
                 self.model_type = 'Simple'
             
         print(f"🤖 Forecaster initialized with {self.model_type} model")
-        if self.weather_api_key and self.weather_api_key != 'your_api_key_here':
-            print("🌤️ Weather API integration enabled")
-        else:
-            print("⚠️ Using synthetic weather data")
     
     def load_commodity_mapping(self):
         """Load commodity mapping from usda_commodity.csv file"""
@@ -162,63 +162,24 @@ class XGBoostLightGBMForecaster:
             return False
     
     def get_weather_data(self, state: str, zip_code: str, days: int = 30) -> Dict:
-        """Get weather forecast data from OpenWeatherMap or generate synthetic"""
-        cache_key = f"{state}_{zip_code}_{days}"
-        if cache_key in self.weather_cache:
-            return self.weather_cache[cache_key]
-        
-        if not self.weather_api_key or self.weather_api_key == 'your_api_key_here':
-            return self._generate_synthetic_weather(state, zip_code, days)
-        
-        try:
-            # Current weather
-            current_url = "http://api.openweathermap.org/data/2.5/weather"
-            current_params = {
-                'zip': f"{zip_code},US",
-                'appid': self.weather_api_key,
-                'units': 'imperial'
-            }
-            
-            current_response = requests.get(current_url, params=current_params, timeout=10)
-            
-            if current_response.status_code == 200:
-                current_data = current_response.json()
-                
-                # Get coordinates for forecast
-                lat, lon = current_data['coord']['lat'], current_data['coord']['lon']
-                
-                # 5-day forecast
-                forecast_url = "http://api.openweathermap.org/data/2.5/forecast"
-                forecast_params = {
-                    'lat': lat,
-                    'lon': lon,
-                    'appid': self.weather_api_key,
-                    'units': 'imperial'
-                }
-                
-                forecast_response = requests.get(forecast_url, params=forecast_params, timeout=10)
-                
-                if forecast_response.status_code == 200:
-                    forecast_data = forecast_response.json()
-                    weather_info = self._process_weather_response(current_data, forecast_data, state, zip_code)
-                    
-                    # Extend to requested days if needed
-                    if days > 5:
-                        weather_info = self._extend_weather_forecast(weather_info, days)
-                    
-                    self.weather_cache[cache_key] = weather_info
-                    return weather_info
-            
-            # If API fails, say why (once per status code, never the key) and use synthetic data
-            failed = forecast_response if current_response.status_code == 200 else current_response
-            if failed.status_code not in self._weather_errors_logged:
-                self._weather_errors_logged.add(failed.status_code)
-                print(f"⚠️ OpenWeather returned {failed.status_code}: {failed.text[:160]} Using sample weather.")
-            return self._generate_synthetic_weather(state, zip_code, days)
-            
-        except Exception as e:
-            print(f"Weather API error: {e}")
-            return self._generate_synthetic_weather(state, zip_code, days)
+        """Weather for a US ZIP from Open-Meteo (no key needed); sample data only if it can't be fetched"""
+        cached = self.weather_cache.get(zip_code)
+        if cached and time.time() - cached[0] < WEATHER_CACHE_SECONDS:
+            weather = cached[1]
+        else:
+            try:
+                weather = open_meteo.fetch_weather(zip_code)
+            except (requests.RequestException, open_meteo.PlaceNotFound, KeyError, ValueError) as e:
+                if (zip_code, str(e)) not in self._weather_errors_logged:
+                    self._weather_errors_logged.add((zip_code, str(e)))
+                    print(f"⚠️ Live weather unavailable for ZIP {zip_code}: {e}. Using sample weather.")
+                return self._generate_synthetic_weather(state, zip_code, days)
+            self.weather_cache[zip_code] = (time.time(), weather)
+
+        # One 16-day fetch serves every length: trim shorter requests, extend longer ones by trend
+        if days <= len(weather['forecast']):
+            return {**weather, 'forecast': weather['forecast'][:days]}
+        return self._extend_weather_forecast({**weather, 'forecast': list(weather['forecast'])}, days)
     
     def _generate_synthetic_weather(self, state: str, zip_code: str, days: int) -> Dict:
         """Generate realistic synthetic weather data"""
@@ -319,35 +280,3 @@ class XGBoostLightGBMForecaster:
         weather_info['forecast'] = current_forecast
         return weather_info
     
-    def _process_weather_response(self, current_data: Dict, forecast_data: Dict, state: str, zip_code: str) -> Dict:
-        """Process OpenWeatherMap API response"""
-        forecast_list = []
-        
-        for item in forecast_data['list'][:40]:  # 5 days * 8 (3-hour intervals)
-            date_str = datetime.fromtimestamp(item['dt']).strftime('%Y-%m-%d')
-            
-            # Group by date and take daily averages
-            existing_day = next((day for day in forecast_list if day['date'] == date_str), None)
-            
-            if not existing_day:
-                forecast_list.append({
-                    'date': date_str,
-                    'temp_high': item['main']['temp_max'],
-                    'temp_low': item['main']['temp_min'],
-                    'humidity': item['main']['humidity'],
-                    'condition': item['weather'][0]['main']
-                })
-            else:
-                # Update with max/min temperatures
-                existing_day['temp_high'] = max(existing_day['temp_high'], item['main']['temp_max'])
-                existing_day['temp_low'] = min(existing_day['temp_low'], item['main']['temp_min'])
-        
-        return {
-            'city': current_data['name'],
-            'state': state,
-            'zip_code': zip_code,
-            'current_temp': current_data['main']['temp'],
-            'current_humidity': current_data['main']['humidity'],
-            'current_condition': current_data['weather'][0]['main'],
-            'forecast': forecast_list
-        }

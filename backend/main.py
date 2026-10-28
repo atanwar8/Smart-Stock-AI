@@ -413,10 +413,9 @@ async def startup_event():
     global forecaster
     
     train_path = TRAIN_DATA_PATH
-    weather_api_key = os.getenv('OPENWEATHER_API_KEY')
     
     # Initialize forecaster
-    forecaster = XGBoostLightGBMForecaster(weather_api_key=weather_api_key)
+    forecaster = XGBoostLightGBMForecaster()
     forecaster.load_commodity_mapping()
     
     # Load training data
