@@ -11,7 +11,7 @@ Produce price forecasting and smart ordering for restaurants. SmartStock learns 
 
 | Page | What you get |
 | --- | --- |
-| **Overview** | Price pulse for any vegetable (USDA history, then the forecast with a likely range), days of cover for every tracked item, what needs ordering, each model's forecast skill, and growing weather. |
+| **Overview** | Price pulse for any vegetable (USDA history, then the forecast with a likely range), days of cover for every tracked item, what needs ordering, each model's forecast skill, and growing weather for any US ZIP code. |
 | **Smart ordering** | Log stock and daily use; get a recommended order quantity and cost, plus the cheapest day to buy over the next week. |
 | **Predictions** | 7, 14 or 30-day outlook with low and high cases, a month-by-year seasonality heatmap, and measured price volatility. |
 | **Alerts** | Running-out, spoilage and forecast price-move alerts, with editable thresholds and channels. |
@@ -66,7 +66,6 @@ Copy `backend/.env.template` to `backend/.env` for local runs, or set these in t
 | --- | --- | --- |
 | `MARS_API_KEY` | none | Free USDA MyMarketNews API key ([sign up](https://mymarketnews.ams.usda.gov), then My Profile, API Key). **Data refresh** needs it. |
 | `REFRESH_ON_STARTUP` | `1` | With a key set, pull new USDA weeks every time the server starts, then train the models. |
-| `OPENWEATHER_API_KEY` | none | Live weather. Without it the app uses sample weather data. |
 | `SEED_DEMO_INVENTORY` | `1` | Starts with four tracked items so the dashboard isn't empty. Set `0` to start blank. |
 | `PRETRAIN_MODELS` | `1` | Trains every vegetable's model in the background at startup. |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Extra CORS origins, only if the UI is hosted separately. |
@@ -96,7 +95,8 @@ smartstock-nextjs/     Dashboard: Next.js static export, Tailwind, Plotly charts
 backend/
   main.py              API routes, inventory, alerts, serves the built dashboard
   core/usda_api.py     Data agent (USDA MyMarketNews API client)
-  core/                Forecast agent (weekly series, features, training, prediction, weather)
+  core/open_meteo.py   Weather by ZIP code from Open-Meteo (no key needed)
+  core/                Forecast agent (weekly series, features, training, prediction)
   tests/               pytest suite
 Example_Train.csv      Weekly USDA retail prices, 2010 to the latest scrape
 docs/decisions/        Architecture decision records
@@ -109,6 +109,7 @@ start.sh               One-command local run
 
 - Inventory, alert settings and trained models live in memory, so they reset on restart or redeploy.
 - The free Render plan sleeps after 15 idle minutes and takes about a minute to wake.
+- Weather comes from [Open-Meteo](https://open-meteo.com/), free without a key for non-commercial use (under 10,000 calls a day; the app caches each ZIP for 30 minutes). Its data is CC BY 4.0, credited on each weather card. A commercial version of SmartStock would need an Open-Meteo plan ([ADR-005](docs/decisions/ADR-005-open-meteo-weather.md)).
 - **Data refresh** needs `MARS_API_KEY`; without it the button is disabled and the page says how to get one. Only one refresh runs at a time.
 - Prices pulled from USDA are saved on the server's temporary disk, not in the repo. After each restart (including waking from sleep) the server downloads them again, so for the first minute or so charts show data up to the CSV in the repo.
 - Order recommendations count stock in pounds, but some vegetables are priced per head or per bunch, so order cost for those is approximate.
