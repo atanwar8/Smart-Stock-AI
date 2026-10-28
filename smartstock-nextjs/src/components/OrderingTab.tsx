@@ -7,6 +7,7 @@ import { postJSON, qs, useApi } from '@/lib/api';
 import type { InventoryRow, Recommendation, SevenDay, Weather } from '@/lib/types';
 import Chart, { CHART } from './Chart';
 import { weatherIcon } from './DashboardTab';
+import ZipCodeInput from './ZipCodeInput';
 import { Button, Card, CardHeader, Empty, ErrorNote, Field, PageHeader, Pill, ProduceTile, Segmented, Select, Skeleton, money, statusLabel, statusTone, type Tone } from './ui';
 
 const num = (s: string) => parseFloat(s) || 0;
@@ -22,7 +23,7 @@ const splitReason = (reason = '') => {
 const urgencyTone = (u: string): Tone => (u === 'high' ? 'bad' : u === 'medium' ? 'warn' : 'good');
 
 export default function OrderingTab({ onInventoryChange }: { onInventoryChange?: () => void }) {
-  const { commodities, selectedCommodity, setSelectedCommodity, selectedState, selectedZipCode, setSelectedZipCode, priceUnit } = useCommodity();
+  const { commodities, selectedCommodity, setSelectedCommodity, selectedState, selectedZipCode, priceUnit } = useCommodity();
   const unit = priceUnit(selectedCommodity);
 
   const inventory = useApi<{ inventory: InventoryRow[] }>('/inventory/list');
@@ -46,9 +47,6 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
   // 7-day outlook follows the selected commodity
   const week = useApi<SevenDay>(`/7-day-prediction?${qs({ commodity: selectedCommodity, zip_code: selectedZipCode })}`);
 
-  // ZIP is edited locally and committed when it's a full 5 digits
-  const [zip, setZip] = useState(selectedZipCode);
-  useEffect(() => setZip(selectedZipCode), [selectedZipCode]);
 
   const refreshAll = () => {
     inventory.reload();
@@ -243,17 +241,7 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
         <Card>
           <CardHeader title="Weather at your kitchen" subtitle="Growing conditions shift next week's prices." />
           <div className="px-5 pb-5">
-            <Field
-              label="ZIP code"
-              inputMode="numeric"
-              maxLength={5}
-              value={zip}
-              onChange={(e) => {
-                const v = e.target.value.replace(/\D/g, '').slice(0, 5);
-                setZip(v);
-                if (v.length === 5) setSelectedZipCode(v);
-              }}
-            />
+            <ZipCodeInput />
             <ul className="mt-4 divide-y divide-line">
               {weather.data
                 ? weather.data.forecast.slice(0, 6).map((d) => {

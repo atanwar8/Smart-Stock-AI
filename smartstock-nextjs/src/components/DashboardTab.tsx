@@ -7,6 +7,7 @@ import { qs, useApi } from '@/lib/api';
 import { goToTab } from '@/lib/tabs';
 import type { InventoryRow, Kpis, SevenDay, TrendChart, Volatility, Weather } from '@/lib/types';
 import Chart, { CHART } from './Chart';
+import ZipCodeInput from './ZipCodeInput';
 import { Button, Card, CardHeader, Delta, Empty, Meter, PageHeader, Pill, ProduceTile, Select, Skeleton, money, statusLabel, statusTone, cx } from './ui';
 
 const greeting = () => {
@@ -326,8 +327,12 @@ export default function DashboardTab() {
 
         {/* Weather */}
         <Card>
-          <CardHeader title="Growing weather" subtitle={sampleWeather ? `Sample data for ZIP ${selectedZipCode}. Add an OpenWeather key for live weather.` : `${w?.city ?? 'Your area'}, next five days.`} />
-          <div className="px-5 pb-5">
+          <CardHeader
+            title="Growing weather"
+            subtitle={sampleWeather ? `Sample data for ZIP ${selectedZipCode}. OpenWeather isn't returning live weather yet.` : `${w?.city ?? 'Your area'} (${selectedZipCode}), next five days.`}
+            action={<ZipCodeInput compact />}
+          />
+          <div className={cx('px-5 pb-5 transition-opacity', weather.loading && w && 'opacity-50')} aria-busy={weather.loading}>
             {!w ? (
               <Skeleton className="h-40" />
             ) : (
