@@ -62,6 +62,7 @@ class XGBoostLightGBMForecaster:
         self.commodity_mapping = {}
         self.weather_api_key = weather_api_key or os.getenv('OPENWEATHER_API_KEY')
         self.weather_cache = {}  # Cache for weather data
+        self._weather_errors_logged = set()  # OpenWeather status codes already reported
         
         # Determine best available model type
         if model_type == 'auto':
@@ -208,7 +209,11 @@ class XGBoostLightGBMForecaster:
                     self.weather_cache[cache_key] = weather_info
                     return weather_info
             
-            # If API fails, use synthetic data
+            # If API fails, say why (once per status code, never the key) and use synthetic data
+            failed = forecast_response if current_response.status_code == 200 else current_response
+            if failed.status_code not in self._weather_errors_logged:
+                self._weather_errors_logged.add(failed.status_code)
+                print(f"⚠️ OpenWeather returned {failed.status_code}: {failed.text[:160]} Using sample weather.")
             return self._generate_synthetic_weather(state, zip_code, days)
             
         except Exception as e:
