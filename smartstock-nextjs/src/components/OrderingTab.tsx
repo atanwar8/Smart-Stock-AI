@@ -8,7 +8,7 @@ import type { InventoryRow, Recommendation, SevenDay, Weather } from '@/lib/type
 import Chart, { CHART } from './Chart';
 import { weatherIcon } from './DashboardTab';
 import ZipCodeInput from './ZipCodeInput';
-import { Button, Card, CardHeader, Empty, ErrorNote, Field, PageHeader, Pill, ProduceTile, Segmented, Select, Skeleton, money, statusLabel, statusTone, type Tone } from './ui';
+import { Button, Card, CardHeader, Empty, ErrorNote, Field, PageHeader, Pill, ProduceTile, Segmented, Select, Skeleton, money, statusLabel, statusTone, WeatherCredit, type Tone } from './ui';
 
 const num = (s: string) => parseFloat(s) || 0;
 
@@ -263,6 +263,7 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
                   })
                 : [0, 1, 2, 3].map((i) => <Skeleton key={i} className="my-2 h-7" />)}
             </ul>
+            {weather.data?.source && <WeatherCredit />}
           </div>
         </Card>
 

@@ -77,6 +77,7 @@ export interface Weather {
   current_humidity: number;
   current_condition: string;
   forecast: { date: string; temp_high: number; temp_low: number; humidity: number; condition: string }[];
+  source?: string; // "Open-Meteo" for live data; absent for sample weather
 }
 
 export interface SevenDay {

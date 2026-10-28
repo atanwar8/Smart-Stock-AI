@@ -8,7 +8,7 @@ import { goToTab } from '@/lib/tabs';
 import type { InventoryRow, Kpis, SevenDay, TrendChart, Volatility, Weather } from '@/lib/types';
 import Chart, { CHART } from './Chart';
 import ZipCodeInput from './ZipCodeInput';
-import { Button, Card, CardHeader, Delta, Empty, Meter, PageHeader, Pill, ProduceTile, Select, Skeleton, money, statusLabel, statusTone, cx } from './ui';
+import { Button, Card, CardHeader, Delta, Empty, Meter, PageHeader, Pill, ProduceTile, Select, Skeleton, WeatherCredit, money, statusLabel, statusTone, cx } from './ui';
 
 const greeting = () => {
   const h = new Date().getHours();
@@ -329,7 +329,7 @@ export default function DashboardTab() {
         <Card>
           <CardHeader
             title="Growing weather"
-            subtitle={sampleWeather ? `Sample data for ZIP ${selectedZipCode}. OpenWeather isn't returning live weather yet.` : `${w?.city ?? 'Your area'} (${selectedZipCode}), next five days.`}
+            subtitle={sampleWeather ? `Sample data for ZIP ${selectedZipCode}: live weather couldn't be loaded.` : `${w?.city ?? 'Your area'}${w?.state ? `, ${w.state}` : ''} (${selectedZipCode}), next five days.`}
             action={<ZipCodeInput compact />}
           />
           <div className={cx('px-5 pb-5 transition-opacity', weather.loading && w && 'opacity-50')} aria-busy={weather.loading}>
@@ -373,6 +373,7 @@ export default function DashboardTab() {
                     <span className="mt-1.5 block">{week.data.weather_impact.explanation}</span>
                   </p>
                 )}
+                {!sampleWeather && <WeatherCredit />}
               </>
             )}
           </div>

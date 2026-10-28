@@ -278,6 +278,18 @@ export function Empty({ icon: Icon, title, body, action }: { icon: LucideIcon; t
   );
 }
 
+// Open-Meteo's data is CC BY 4.0, so every live weather view credits it
+export function WeatherCredit() {
+  return (
+    <p className="mt-4 text-[11.5px] text-faint">
+      Weather data by{' '}
+      <a href="https://open-meteo.com/" target="_blank" rel="noreferrer" className="underline decoration-line-2 underline-offset-2 hover:text-ink">
+        Open-Meteo.com
+      </a>
+    </p>
+  );
+}
+
 export function ErrorNote({ children }: { children: ReactNode }) {
   return <p className="rounded-tile bg-bad/8 px-3.5 py-2.5 text-[13px] text-bad">{children}</p>;
 }
