@@ -51,10 +51,22 @@ def engine() -> str:
     return _ENGINE
 
 
+def _threads() -> int:
+    """Threads per fit: OMP_NUM_THREADS when set (the Docker image sets 1, see the Dockerfile), else up to 4.
+
+    os.cpu_count() reports the host's cores even when the container gets a fraction of one CPU, and surplus
+    OpenMP threads spin while they wait, so on a small CPU share more threads are slower, not faster.
+    """
+    try:
+        return max(1, int(os.environ["OMP_NUM_THREADS"]))
+    except (KeyError, ValueError):
+        return min(4, os.cpu_count() or 1)
+
+
 def _new_regressor():
     if engine() == "lightgbm":
         import lightgbm as lgb
-        return lgb.LGBMRegressor(n_jobs=min(4, os.cpu_count() or 1), **PARAMS)
+        return lgb.LGBMRegressor(n_jobs=_threads(), **PARAMS)
     from sklearn.ensemble import HistGradientBoostingRegressor
     return HistGradientBoostingRegressor(loss="absolute_error", max_iter=PARAMS["n_estimators"],
                                          learning_rate=PARAMS["learning_rate"], max_leaf_nodes=PARAMS["num_leaves"],
