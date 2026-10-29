@@ -4,92 +4,99 @@ SmartStock AI - Core Forecasting Module
 Extracted from Streamlit app for API backend
 """
 
-import pandas as pd
-import numpy as np
+import itertools
 import os
 import time
-from datetime import datetime, timedelta
-import requests
 import warnings
-from typing import Dict, List, Tuple, Optional
-import joblib
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+import requests
 
 from core import open_meteo
+from core.forecaster_utils import LIGHTGBM_AVAILABLE, TTLCache
 
 WEATHER_CACHE_SECONDS = 30 * 60  # one Open-Meteo fetch per ZIP per half hour
+# When Open-Meteo can't answer, keep the sample weather a few minutes instead of retrying (and waiting on
+# its timeout) on every request
+WEATHER_RETRY_SECONDS = 5 * 60
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-# Try to import XGBoost and LightGBM
-# Handle ML library imports with better error handling
-try:
-    import lightgbm as lgb
-    LIGHTGBM_AVAILABLE = True
-    print("✅ LightGBM loaded successfully")
-except Exception as e:
-    LIGHTGBM_AVAILABLE = False
-    print(f"⚠️ LightGBM not available: {e}")
+print("✅ LightGBM loaded successfully" if LIGHTGBM_AVAILABLE else "⚠️ LightGBM not available (needs OpenMP); using a random forest")
 
+# scikit-learn is the fallback model and provides the metrics
 try:
-    import xgboost as xgb
-    XGBOOST_AVAILABLE = True
-    print("✅ XGBoost loaded successfully")
-except Exception as e:
-    XGBOOST_AVAILABLE = False
-    print(f"⚠️ XGBoost not available: {e}")
-
-# Always ensure we have sklearn as fallback
-try:
-    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-    from sklearn.linear_model import LinearRegression
+    import sklearn  # noqa: F401
     SKLEARN_AVAILABLE = True
-    print("✅ Scikit-learn available as fallback")
 except ImportError as e:
     SKLEARN_AVAILABLE = False
     print(f"❌ Scikit-learn not available: {e}")
 
+# Unique across every forecaster in the process, so two instances can never share a data version
+_data_generations = itertools.count(1)
+
 
 class XGBoostLightGBMForecaster:
-    """Forecasting system using XGBoost/LightGBM with weather integration"""
-    
+    """Forecasting system using LightGBM (random forest fallback) with weather integration.
+
+    The name is historical: XGBoost was dropped as an unused dependency.
+    """
+
     def __init__(self, model_type: str = 'auto'):
         self.models = {}
-        self.scalers = {}
-        self.label_encoders = {}
         self.feature_names = {}
         self.model_performance = {}
+        self.cache = TTLCache()  # weekly series, forecasts and chart payloads for the current data version
+        self._data_version = 'empty'
+        self.latest_report: Optional[pd.Timestamp] = None
         self.train_data = None
         self.viable_commodities = []
         self.commodity_mapping = {}
         self.weather_cache = {}  # ZIP -> (fetched_at, 16-day Open-Meteo weather)
+        self._fallback_weather = {}  # (ZIP, state) -> (made_at, sample weather) while Open-Meteo is unreachable
         self._weather_errors_logged = set()  # (ZIP, error) pairs already reported
-        
-        # Determine best available model type
-        if model_type == 'auto':
-            if LIGHTGBM_AVAILABLE:
-                self.model_type = 'LightGBM'
-            elif XGBOOST_AVAILABLE:
-                self.model_type = 'XGBoost'
-            elif SKLEARN_AVAILABLE:
-                self.model_type = 'RandomForest'
-            else:
-                self.model_type = 'Simple'
+
+        # LightGBM when it loads, otherwise scikit-learn's random forest
+        if model_type in ('auto', 'LightGBM') and LIGHTGBM_AVAILABLE:
+            self.model_type = 'LightGBM'
+        elif SKLEARN_AVAILABLE:
+            self.model_type = 'RandomForest'
         else:
-            # Use specified model if available, otherwise fallback
-            if model_type == 'LightGBM' and LIGHTGBM_AVAILABLE:
-                self.model_type = 'LightGBM'
-            elif model_type == 'XGBoost' and XGBOOST_AVAILABLE:
-                self.model_type = 'XGBoost'
-            elif SKLEARN_AVAILABLE:
-                self.model_type = 'RandomForest'
-            else:
-                self.model_type = 'Simple'
-            
+            self.model_type = 'Simple'
+
         print(f"🤖 Forecaster initialized with {self.model_type} model")
+
+    @property
+    def train_data(self) -> Optional[pd.DataFrame]:
+        return self._train_data
+
+    @train_data.setter
+    def train_data(self, frame: Optional[pd.DataFrame]) -> None:
+        """Replacing the training frame (load, USDA refresh, tests) starts a new data version, which empties every cache."""
+        self._train_data = frame
+        latest = None
+        if frame is not None and 'report_date' in frame.columns and len(frame):
+            try:
+                latest = pd.to_datetime(frame['report_date']).max()
+            except (ValueError, TypeError):
+                latest = None
+        self.latest_report = latest
+        rows = 0 if frame is None else len(frame)
+        latest_s = latest.date().isoformat() if latest is not None and not pd.isna(latest) else '-'
+        self._data_version = f"{next(_data_generations)}:{rows}:{latest_s}"
+
+    @property
+    def data_version(self) -> str:
+        """Changes whenever the training frame is replaced: '<generation>:<rows>:<latest report date>'."""
+        return self._data_version
+
+    def invalidate_caches(self) -> None:
+        """For code that edits train_data in place: start a new data version so nothing stale is served."""
+        self.train_data = self._train_data
     
     def load_commodity_mapping(self):
         """Load commodity mapping from usda_commodity.csv file"""
@@ -97,7 +104,6 @@ class XGBoostLightGBMForecaster:
             # Try to load from the CSV file
             csv_path = os.path.join(os.path.dirname(__file__), '../../usda_commodity.csv')
             if os.path.exists(csv_path):
-                import pandas as pd
                 commodity_df = pd.read_csv(csv_path)
                 
                 # Create mapping from USDA names to display names
@@ -136,9 +142,10 @@ class XGBoostLightGBMForecaster:
     def load_training_data(self, train_path: str):
         """Load training data"""
         try:
-            self.train_data = pd.read_csv(train_path)
-            self.train_data['report_date'] = pd.to_datetime(self.train_data['report_date'])
-            
+            frame = pd.read_csv(train_path)
+            frame['report_date'] = pd.to_datetime(frame['report_date'])
+            self.train_data = frame  # assigned once, fully parsed, so the new data version sees the final frame
+
             # Get commodities that have sufficient data
             commodity_counts = self.train_data['commodity'].value_counts()
             commodities_with_data = commodity_counts[commodity_counts >= 50].index.tolist()
@@ -167,13 +174,19 @@ class XGBoostLightGBMForecaster:
         if cached and time.time() - cached[0] < WEATHER_CACHE_SECONDS:
             weather = cached[1]
         else:
+            fallback = self._fallback_weather.get((zip_code, state))
+            if fallback and time.time() - fallback[0] < WEATHER_RETRY_SECONDS and len(fallback[1]['forecast']) >= days:
+                # Same sample weather for a few minutes: steady numbers on screen, no repeated Open-Meteo timeouts
+                return {**fallback[1], 'forecast': fallback[1]['forecast'][:days]}
             try:
                 weather = open_meteo.fetch_weather(zip_code)
             except (requests.RequestException, open_meteo.PlaceNotFound, KeyError, ValueError) as e:
                 if (zip_code, str(e)) not in self._weather_errors_logged:
                     self._weather_errors_logged.add((zip_code, str(e)))
                     print(f"⚠️ Live weather unavailable for ZIP {zip_code}: {e}. Using sample weather.")
-                return self._generate_synthetic_weather(state, zip_code, days)
+                sample = self._generate_synthetic_weather(state, zip_code, max(days, open_meteo.MAX_FORECAST_DAYS))
+                self._fallback_weather[(zip_code, state)] = (time.time(), sample)
+                return {**sample, 'forecast': sample['forecast'][:days]}
             self.weather_cache[zip_code] = (time.time(), weather)
 
         # One 16-day fetch serves every length: trim shorter requests, extend longer ones by trend

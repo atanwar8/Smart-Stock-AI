@@ -1,3 +1,10 @@
+import os
+
+# Tests never touch the live Supabase store or USDA, even when backend/.env has real values:
+# main.py calls load_dotenv(), which keeps a variable that is already set, so blank them first.
+os.environ["SUPABASE_DB_URL"] = ""
+os.environ["MARS_API_KEY"] = ""
+
 import pytest
 import requests
 

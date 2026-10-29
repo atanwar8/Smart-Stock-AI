@@ -1,11 +1,29 @@
 import type { Metadata, Viewport } from "next";
-import { Urbanist } from "next/font/google";
+import { Geist_Mono, Instrument_Serif, Inter } from "next/font/google";
 import "./globals.css";
 
-const urbanist = Urbanist({
-  variable: "--font-urbanist",
+// Apple devices render the UI in SF (system stack in globals.css); Inter is the fallback everywhere else.
+// Every face swaps in when ready so text is never blocked on a font download.
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  display: "swap",
+});
+
+// Serif for headlines and big numbers
+const instrument = Instrument_Serif({
+  variable: "--font-instrument",
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
+  display: "swap",
+});
+
+// Mono for micro-labels and small numerics
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -14,7 +32,8 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#10201c",
+  // Matches the porcelain canvas so the browser chrome blends into the page
+  themeColor: "#f2f3ef",
 };
 
 export default function RootLayout({
@@ -24,7 +43,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${urbanist.variable} antialiased`}>{children}</body>
+      <body className={`${inter.variable} ${instrument.variable} ${geistMono.variable} antialiased`}>{children}</body>
     </html>
   );
 }

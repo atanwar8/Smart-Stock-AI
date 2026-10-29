@@ -145,3 +145,58 @@ export interface AlertSettings {
   push_notifications: boolean;
   alert_frequency: string;
 }
+
+/* ---------- Forecast Studio + pipeline (docs/handoff/SPEC.md §5) ---------- */
+
+export interface ForecastPoint {
+  date: string;
+  yhat: number;
+  lo: number;
+  hi: number;
+}
+
+export interface ActiveForecast {
+  forecast_id: string;
+  commodity: string;
+  unit?: string;
+  model: string;
+  model_name: string;
+  applied_at: string;
+  params?: Record<string, unknown>;
+  forecast: ForecastPoint[];
+  summary?: string;
+}
+
+export type PipelineStep = 'extract' | 'load' | 'train' | 'test' | 'done';
+
+export interface IngestRun {
+  id: number | string;
+  started_at: string;
+  finished_at?: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  rows_fetched?: number;
+  rows_inserted?: number;
+  rows_updated?: number;
+  status: 'running' | 'succeeded' | 'failed' | 'skipped' | string;
+  error?: string | null;
+  source?: string;
+  message?: string | null;
+}
+
+export interface PipelineStatus {
+  state: 'idle' | 'running' | 'succeeded' | 'failed';
+  step?: PipelineStep | null;
+  progress?: number;
+  message?: string | null;
+  store?: { backend: 'supabase' | 'local' | string; rows: number; first_date?: string | null; last_date?: string | null; commodities?: number };
+  last_run?: IngestRun | null;
+  usda_api_configured?: boolean;
+}
+
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}

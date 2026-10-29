@@ -1,49 +1,60 @@
 @import "tailwindcss";
 
+/* Fonts come from next/font in layout.tsx as CSS variables, so these resolve per element ("inline") */
 @theme inline {
-  --font-sans: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* UI text: Apple's system face where it exists, Inter everywhere else */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", var(--font-inter), "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  /* Redesign contract (SPEC §3): serif for big numbers and headlines, mono for micro-labels */
+  --font-display: var(--font-instrument), "New York", ui-serif, Georgia, serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 @theme {
-  /* Surfaces */
-  --color-canvas: #eceee9;
-  --color-surface: #fbfcfa;
-  --color-surface-2: #f3f5f1;
-  --color-well: rgb(20 34 30 / 0.055);
-  --color-line: rgb(20 34 30 / 0.1);
-  --color-line-2: rgb(20 34 30 / 0.18);
+  /* Surfaces: cool porcelain canvas, white cards */
+  --color-canvas: #f2f3ef;
+  --color-surface: #ffffff;
+  --color-surface-2: #f6f7f4;
+  --color-well: rgb(28 33 30 / 0.05);
+  --color-line: rgb(28 33 30 / 0.085);
+  --color-line-2: rgb(28 33 30 / 0.16);
 
   /* Content */
-  --color-ink: #121a17;
-  --color-muted: #56615c; /* 6.2:1 on surface */
-  --color-faint: #67716c; /* 4.9:1 on surface */
-
-  /* Sidebar */
-  --color-side: #10201c;
-  --color-side-ink: #e3eeea;
-  --color-harvest: #e8b54d; /* active nav pill */
-  --color-harvest-ink: #241803;
-
-  /* Accent: primary actions and actual prices; brass marks anything forecast */
-  --color-primary: #0b6b5f;
-  --color-primary-hover: #08584e;
-  --color-on-primary: #effcf8;
-  --color-brass: #c3922e;
+  --color-ink: #1c1f1d;
+  --color-muted: #5a605c; /* 6.4:1 on surface */
+  --color-faint: #6b716d; /* 4.9:1 on surface */
 
   /* Signals */
-  --color-good: #1a6e3c;
-  --color-bad: #ab311f;
-  --color-warn: #9a5f00;
-  --color-info: #2a5fc4;
+  --color-good: #1f7a45;
+  --color-bad: #b3361f;
+  --color-warn: #8f5a00;
+  --color-info: #2f62c6;
 
-  --radius-card: 22px;
-  --radius-tile: 14px;
+  /* Redesign contract (docs/handoff/SPEC.md §3): names are shared with the Forecast Studio; values may be tuned */
+  --color-accent: #2e6a4e; /* basil: actual prices, primary actions */
+  --color-accent-ink: #f3faf6;
+  --color-forecast: #5b5bd6; /* iris: anything predicted (lines, cones, chips) */
+  --color-forecast-soft: rgb(91 91 214 / 0.13);
+  --color-night: #0f1823; /* the one dark "night market" card per page */
+  --color-night-2: #182433;
+  --color-night-ink: #e8eef4;
 
-  --shadow-card: 0 1px 2px rgb(20 34 30 / 0.05), 0 14px 32px -22px rgb(20 34 30 / 0.28);
-  --shadow-pop: 0 26px 60px -18px rgb(14 26 23 / 0.34), 0 2px 6px rgb(14 26 23 / 0.08);
-  --shadow-side: 0 30px 60px -30px rgb(8 20 17 / 0.55);
+  /* Legacy aliases so older markup keeps working; new code uses accent / forecast */
+  --color-primary: #2e6a4e;
+  --color-primary-hover: #25573f;
+  --color-on-primary: #f3faf6;
+  --color-brass: #5b5bd6;
+
+  --radius-card: 24px;
+  --radius-tile: 16px;
+
+  --shadow-card: 0 0.5px 1px rgb(28 33 30 / 0.04), 0 1px 3px rgb(28 33 30 / 0.03), 0 18px 40px -28px rgb(28 33 30 / 0.22);
+  --shadow-pop: 0 24px 56px -20px rgb(15 24 35 / 0.32), 0 2px 8px rgb(15 24 35 / 0.07);
+  --shadow-night: 0 30px 60px -30px rgb(15 24 35 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.06);
 
   --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Slight overshoot for "pop" moments (selection, hover on symbols) */
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 :root {
@@ -52,33 +63,198 @@
 
 body {
   background-color: var(--color-canvas);
+  /* Two faint washes of basil and iris: the canvas hints at "actual" and "forecast" without decorating */
   background-image:
-    radial-gradient(900px 420px at 12% -8%, #d9ebe5 0%, transparent 60%),
-    radial-gradient(800px 380px at 92% -10%, #efe6d2 0%, transparent 60%);
+    radial-gradient(1100px 520px at 8% -12%, rgb(46 106 78 / 0.07) 0%, transparent 62%),
+    radial-gradient(900px 480px at 96% -14%, rgb(91 91 214 / 0.06) 0%, transparent 60%);
   background-repeat: no-repeat;
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: 14px;
-  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/* One orchestrated moment: the page body rises in when you switch sections */
+/* Serif display numbers use lining figures */
+.font-display {
+  font-feature-settings: "lnum" 1;
+}
+
+/* Small mono labels: the almanac's marginal notes */
+.micro {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ---------- Motion ---------- */
+
+/* One orchestrated moment per section switch: cards rise in, one after another */
+.stagger > * {
+  animation: rise 0.52s var(--ease-spring) both;
+}
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay: 120ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 200ms; }
+.stagger > *:nth-child(7) { animation-delay: 240ms; }
+.stagger > *:nth-child(n + 8) { animation-delay: 280ms; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+
 .page-enter {
-  animation: page-enter 0.4s var(--ease-out-soft);
+  animation: page-enter 0.42s var(--ease-spring);
 }
 @keyframes page-enter {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
 
+/* Skeleton shimmer: a soft light band sweeping across the placeholder */
+.shimmer {
+  background-color: var(--color-well);
+  background-image: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.75) 50%, transparent 80%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.5s linear infinite;
+}
+.shimmer-night {
+  background-color: rgb(255 255 255 / 0.06);
+  background-image: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.08) 50%, transparent 80%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.5s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
+/* Chart marks grow from their baseline the first time they appear */
+.grow-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: grow-y 0.7s var(--ease-spring) both;
+}
+@keyframes grow-y {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+.fade-in {
+  animation: fade-in 0.6s var(--ease-out-soft) both;
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.draw-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 1s var(--ease-spring) forwards;
+}
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* ---------- Produce symbols (components/produce/ProduceIcon.tsx) ---------- */
+
+.produce-sym {
+  transition: transform 0.36s var(--ease-bounce);
+}
+.produce-sym > svg {
+  overflow: visible;
+}
+.produce-sym:hover,
+button:hover > .produce-sym,
+a:hover > .produce-sym {
+  transform: scale(1.08);
+}
+.produce-sym [data-part] {
+  transform-box: fill-box;
+}
+
+/* Each symbol has its own idle personality; durations differ so a row never moves in lockstep */
+.produce-sym.is-animated [data-part="tomato"] { transform-origin: 50% 100%; animation: p-wobble 3.4s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="leaf-1"] { transform-origin: 50% 100%; animation: p-flutter 2.8s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="leaf-2"] { transform-origin: 50% 100%; animation: p-flutter 2.8s ease-in-out -1.4s infinite; }
+.produce-sym.is-animated [data-part="carrot"] { transform-origin: 50% 50%; animation: p-bob 2.6s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="carrot-top"] { transform-origin: 50% 100%; animation: p-sway 2.6s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="florets"] { transform-origin: 50% 85%; animation: p-breathe 3.2s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="cucumber"] { transform-origin: 50% 50%; animation: p-roll 4s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="curds"] { transform-origin: 50% 90%; animation: p-breathe 3.6s ease-in-out -0.8s infinite; }
+.produce-sym.is-animated [data-part="cabbage"] { transform-origin: 50% 60%; animation: p-turn 4.4s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="spear-1"] { transform-origin: 50% 100%; animation: p-sway 3s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="spear-2"] { transform-origin: 50% 100%; animation: p-sway 3s ease-in-out -1s infinite; }
+.produce-sym.is-animated [data-part="spear-3"] { transform-origin: 50% 100%; animation: p-sway 3s ease-in-out -2s infinite; }
+.produce-sym.is-animated [data-part="sweet-potato"] { transform-origin: 50% 50%; animation: p-tumble 4.2s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="stalk-1"] { transform-origin: 50% 100%; animation: p-sway 2.4s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="stalk-2"] { transform-origin: 50% 100%; animation: p-sway 2.4s ease-in-out -0.8s infinite; }
+.produce-sym.is-animated [data-part="stalk-3"] { transform-origin: 50% 100%; animation: p-sway 2.4s ease-in-out -1.6s infinite; }
+.produce-sym.is-animated [data-part="pepper"] { transform-origin: 50% 90%; animation: p-tilt 3.6s ease-in-out infinite; }
+.produce-sym.is-animated [data-part="sprout"] { transform-origin: 50% 100%; animation: p-sway 3.2s ease-in-out infinite; }
+
+@keyframes p-wobble {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-5deg); }
+  40% { transform: rotate(4deg); }
+  60% { transform: rotate(-2deg); }
+  80% { transform: rotate(1deg); }
+}
+@keyframes p-flutter {
+  0%, 100% { transform: rotate(0deg) scaleY(1); }
+  50% { transform: rotate(-3deg) scaleY(1.05); }
+}
+@keyframes p-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.2px); }
+}
+@keyframes p-sway {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+@keyframes p-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+@keyframes p-roll {
+  0%, 100% { transform: rotate(-6deg); }
+  50% { transform: rotate(6deg); }
+}
+@keyframes p-turn {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(8deg); }
+}
+@keyframes p-tumble {
+  0%, 100% { transform: translateX(0) rotate(-4deg); }
+  50% { transform: translateX(0.8px) rotate(6deg); }
+}
+@keyframes p-tilt {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(5deg); }
+}
+
+/* ---------- Controls ---------- */
+
 :focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+input[type="range"] {
+  accent-color: var(--color-forecast);
 }
 
 /* Number inputs without spinners, matching the rest of the form controls */
@@ -91,9 +267,20 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+/* Horizontal scrollers (produce switcher on phones) without a visible bar */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

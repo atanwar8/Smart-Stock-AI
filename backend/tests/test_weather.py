@@ -84,3 +84,21 @@ def test_unknown_zip_falls_back_to_sample_weather_and_says_why(monkeypatch, caps
 
     assert first["city"].startswith("City-")  # sample weather
     assert logged.count("No US place found for ZIP 00000") == 1
+
+
+def test_while_open_meteo_is_down_sample_weather_is_reused_instead_of_retrying(monkeypatch):
+    calls = []
+
+    def down(url, params, timeout):
+        calls.append(url)
+        raise requests.ConnectionError("Open-Meteo is down")
+
+    monkeypatch.setattr(open_meteo.requests, "get", down)
+    forecaster = XGBoostLightGBMForecaster()
+
+    week = forecaster.get_weather_data("CA", "90210", 7)
+    three_days = forecaster.get_weather_data("CA", "90210", 3)
+
+    assert len(calls) == 1  # no second wait on a timeout within the retry window
+    assert three_days["forecast"] == week["forecast"][:3]  # steady numbers, so the response's ETag holds
+    assert three_days["current_temp"] == week["current_temp"]

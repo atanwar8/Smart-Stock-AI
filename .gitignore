@@ -22,3 +22,7 @@ out/
 .vercel
 .env*
 !.env.template
+
+# Local training store, ML venv (TimesFM), model weights cache
+backend/var/
+backend/.venv-ml/

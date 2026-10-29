@@ -1,18 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Droplets, PackageOpen, PackagePlus, Pencil, ShoppingCart, Sparkles } from 'lucide-react';
-import { useCommodity } from '../contexts/CommodityContext';
-import { postJSON, qs, useApi } from '@/lib/api';
-import type { InventoryRow, Recommendation, SevenDay, Weather } from '@/lib/types';
-import Chart, { CHART } from './Chart';
-import { weatherIcon } from './DashboardTab';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, PackageOpen, PackagePlus, ShoppingCart } from 'lucide-react';
+import { useCommodityActions, useCommodityState } from '../contexts/CommodityContext';
+import { getJSON, postJSON, qs, useApi } from '@/lib/api';
+import { planOrders } from '@/lib/orderPlan';
+import type { InventoryRow, Recommendation, SevenDay } from '@/lib/types';
+import { num, weekday } from '@/lib/weather';
+import { count, verb } from '@/lib/words';
+import { Bars } from './charts';
+import OrderCalendar, { type CalendarView } from './ordering/OrderCalendar';
+import ProduceIcon, { produceMeta } from './produce/ProduceIcon';
 import ZipCodeInput from './ZipCodeInput';
-import { Button, Card, CardHeader, Empty, ErrorNote, Field, PageHeader, Pill, ProduceTile, Segmented, Select, Skeleton, money, statusLabel, statusTone, WeatherCredit, type Tone } from './ui';
+import { Button, Card, CardHeader, Empty, ErrorNote, Field, Micro, PageHeader, Pill, Skeleton, money, statusLabel, statusTone, type Tone } from './ui';
 
-const num = (s: string) => parseFloat(s) || 0;
-
-// The API phrases reasons like "🆕 STARTER INVENTORY: Begin with 40 lbs…"; split the shouty tag from the sentence
+// The API phrases reasons like "STARTER INVENTORY: Begin with 40 lbs…"; split the shouty tag from the sentence
 const splitReason = (reason = '') => {
   const m = reason.match(/^[^A-Za-z]*([A-Z][A-Z &/-]+):\s*([\s\S]*)$/);
   if (!m) return { tag: undefined, text: reason };
@@ -23,17 +25,77 @@ const splitReason = (reason = '') => {
 const urgencyTone = (u: string): Tone => (u === 'high' ? 'bad' : u === 'medium' ? 'warn' : 'good');
 
 export default function OrderingTab({ onInventoryChange }: { onInventoryChange?: () => void }) {
-  const { commodities, selectedCommodity, setSelectedCommodity, selectedState, selectedZipCode, priceUnit } = useCommodity();
+  const { selectedCommodity, selectedState, selectedZipCode, priceUnit } = useCommodityState();
+  const { setSelectedCommodity } = useCommodityActions();
   const unit = priceUnit(selectedCommodity);
+  const label = produceMeta(selectedCommodity).label;
+  const place = qs({ state: selectedState, zip_code: selectedZipCode });
 
   const inventory = useApi<{ inventory: InventoryRow[] }>('/inventory/list');
-  const recommendation = useApi<Recommendation>(`/inventory/smart-recommendation/${encodeURIComponent(selectedCommodity)}?${qs({ state: selectedState, zip_code: selectedZipCode })}`);
-  const weather = useApi<Weather>(`/weather?${qs({ state: selectedState, zip_code: selectedZipCode, days: 7 })}`);
+  const recommendation = useApi<Recommendation>(`/inventory/smart-recommendation/${encodeURIComponent(selectedCommodity)}?${place}`);
+  const week = useApi<SevenDay>(`/7-day-prediction?${qs({ commodity: selectedCommodity, zip_code: selectedZipCode })}`);
 
   const rows = useMemo(() => inventory.data?.inventory ?? [], [inventory.data]);
   const tracked = rows.find((r) => r.ingredient === selectedCommodity);
 
-  // Stock form, prefilled from the walk-in when the item is already tracked
+  // Current price for every tracked item, so the calendar can price each planned order
+  const ingredients = rows.map((r) => r.ingredient).join('|');
+  const [prices, setPrices] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!ingredients) return;
+    let cancelled = false;
+    Promise.allSettled(
+      ingredients.split('|').map((c) => getJSON<Recommendation>(`/inventory/smart-recommendation/${encodeURIComponent(c)}?${place}`).then((r) => [c, r.current_price] as const))
+    ).then((results) => {
+      if (!cancelled) setPrices(Object.fromEntries(results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ingredients, place]);
+
+  /* ---------- Order calendar ---------- */
+  const [today] = useState(() => new Date());
+  const [view, setView] = useState<CalendarView>('month');
+  const orders = useMemo(() => planOrders(rows, prices, today, new Date(today.getFullYear() + 1, today.getMonth() + 1, 0)), [rows, prices, today]);
+  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [lastSkipped, setLastSkipped] = useState<string | null>(null);
+  const toggleSkip = useCallback(
+    (key: string) => {
+      const next = new Set(skipped);
+      if (next.has(key)) {
+        next.delete(key);
+        setLastSkipped(null);
+      } else {
+        next.add(key);
+        setLastSkipped(key);
+      }
+      setSkipped(next);
+    },
+    [skipped]
+  );
+  const undoSkip = useCallback(() => {
+    setSkipped((prev) => {
+      const next = new Set(prev);
+      if (lastSkipped) next.delete(lastSkipped);
+      return next;
+    });
+    setLastSkipped(null);
+  }, [lastSkipped]);
+
+  /* ---------- Best day to buy ---------- */
+  const prices7 = useMemo(() => week.data?.predictions ?? [], [week.data]);
+  const dates7 = week.data?.dates ?? [];
+  const spread = prices7.length ? Math.max(...prices7.map((p) => p.price)) - Math.min(...prices7.map((p) => p.price)) : 0;
+  const flat = spread < 0.005;
+  const cheapest = prices7.length && !flat ? prices7.reduce((best, p, i) => (p.price < prices7[best].price ? i : best), 0) : -1;
+  const dayName = (i: number) => (i === 0 ? 'today' : dates7[i] ? weekday(dates7[i].slice(0, 10)) : prices7[i]?.day ?? '');
+
+  const rec = recommendation.data;
+  const qtyForSavings = rec?.recommended_quantity || (tracked ? Math.round(num(tracked.daily_usage) * 7) : 0);
+  const savings = cheapest >= 0 && qtyForSavings > 0 ? { amount: spread * qtyForSavings, text: `buying ${label.toLowerCase()} ${cheapest === 0 ? 'today' : `on ${dayName(cheapest)}`}` } : undefined;
+
+  /* ---------- Stock form ---------- */
   const [form, setForm] = useState({ stock: '', usage: '', capacity: '' });
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'good' | 'bad'; text: string } | null>(null);
@@ -43,10 +105,6 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
     setForm({ stock: trackedStock ? String(num(trackedStock)) : '', usage: trackedUsage ? String(num(trackedUsage)) : '', capacity: '' });
   }, [selectedCommodity, trackedStock, trackedUsage]);
   useEffect(() => setNotice(null), [selectedCommodity]);
-
-  // 7-day outlook follows the selected commodity
-  const week = useApi<SevenDay>(`/7-day-prediction?${qs({ commodity: selectedCommodity, zip_code: selectedZipCode })}`);
-
 
   const refreshAll = () => {
     inventory.reload();
@@ -66,7 +124,7 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
     setSaving(true);
     try {
       await postJSON('/inventory/update', { ingredient: selectedCommodity, current_stock: stock, daily_usage: usage, max_capacity: capacity, unit: 'lbs' });
-      setNotice({ tone: 'good', text: `${selectedCommodity} stock saved.` });
+      setNotice({ tone: 'good', text: `${label} saved.` });
       refreshAll();
     } catch (err) {
       setNotice({ tone: 'bad', text: `Couldn't save stock: ${(err as Error).message}` });
@@ -78,12 +136,11 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
   const [ordering, setOrdering] = useState(false);
   const [ordered, setOrdered] = useState<string | null>(null);
   const placeOrder = async () => {
-    const r = recommendation.data;
-    if (!r) return;
+    if (!rec) return;
     setOrdering(true);
     try {
-      await postJSON('/inventory/confirm-order', { ingredient: selectedCommodity, quantity: r.recommended_quantity, price_per_unit: r.current_price, unit: 'lbs' });
-      setOrdered(`Ordered ${r.recommended_quantity} lbs of ${selectedCommodity} for ${money(r.total_cost)}.`);
+      await postJSON('/inventory/confirm-order', { ingredient: selectedCommodity, quantity: rec.recommended_quantity, price_per_unit: rec.current_price, unit: 'lbs' });
+      setOrdered(`Ordered ${rec.recommended_quantity} lbs of ${label.toLowerCase()} for ${money(rec.total_cost)}.`);
       refreshAll();
     } catch (err) {
       setOrdered(`Couldn't place the order: ${(err as Error).message}`);
@@ -93,35 +150,114 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
   };
   useEffect(() => setOrdered(null), [selectedCommodity]);
 
-  const rec = recommendation.data;
   const reason = splitReason(rec?.reason);
-
-  const prices = week.data?.predictions ?? [];
-  const spread = prices.length ? Math.max(...prices.map((p) => p.price)) - Math.min(...prices.map((p) => p.price)) : 0;
-  const flat = spread < 0.005;
-  const cheapest = prices.length && !flat ? prices.reduce((best, p, i) => (p.price < prices[best].price ? i : best), 0) : -1;
+  const monthKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const monthOrders = orders.filter((o) => o.date.startsWith(monthKey) && !skipped.has(o.key));
+  const monthSpend = monthOrders.reduce((s, o) => s + (o.spend ?? 0), 0);
 
   return (
     <>
       <PageHeader
-        crumb={<>Plan <span className="mx-1.5">›</span> Smart ordering</>}
+        crumb={<span>Plan your deliveries</span>}
         title="Smart ordering"
-        summary={<>Log what&apos;s in the walk-in and SmartStock times the next order around the price forecast and shelf life.</>}
+        summary={
+          rows.length ? (
+            <>
+              <b>{count(monthOrders.length, 'order')}</b> planned for the rest of this month, about <b>{money(monthSpend, 0)}</b>.{' '}
+              {cheapest >= 0 ? (
+                <>
+                  {label} {verb(label, 'are', 'is')} cheapest <b>{cheapest === 0 ? 'today' : `on ${dayName(cheapest)}`}</b> this week.
+                </>
+              ) : prices7.length ? (
+                <>
+                  {label} {verb(label, 'hold', 'holds')} near <b>{money(prices7[0].price)}{unit}</b> all week.
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>Log what&apos;s in the walk-in and SmartStock plans each order around the price forecast and shelf life.</>
+          )
+        }
       />
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="stagger grid gap-4 lg:grid-cols-12">
+        <OrderCalendar
+          orders={orders}
+          skipped={skipped}
+          onToggle={toggleSkip}
+          lastSkipped={lastSkipped}
+          onUndo={undoSkip}
+          view={view}
+          onViewChange={setView}
+          savings={savings}
+          today={today}
+        />
+
+        {/* Recommendation: the page's night card */}
+        <Card tone="night" label={`Recommended ${label.toLowerCase()} order`} className="flex flex-col lg:col-span-4">
+          <div className="flex items-start justify-between gap-3 px-5 pt-5 sm:px-6">
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-white/[0.07] ring-1 ring-white/10">
+                <ProduceIcon commodity={selectedCommodity} size={30} animated />
+              </span>
+              <div className="leading-tight">
+                <div className="text-[15px] font-semibold text-white">Next order</div>
+                <Micro className="text-night-ink/55">{label}</Micro>
+              </div>
+            </div>
+            {rec && (
+              <span className="rounded-full bg-white/10 px-2.5 py-1 text-[12px] font-semibold text-night-ink">
+                {rec.urgency === 'high' ? 'Order today' : rec.urgency === 'medium' ? 'This week' : 'No rush'}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-1 flex-col px-5 pb-5 pt-5 sm:px-6">
+            {recommendation.error ? (
+              <p className="rounded-tile bg-white/[0.06] px-3.5 py-2.5 text-[13px] text-[#fda4af]">Couldn&apos;t get a recommendation: {recommendation.error}</p>
+            ) : !rec ? (
+              <div className="space-y-3">
+                <Skeleton night className="h-16 w-40" />
+                <Skeleton night className="h-4 w-56 rounded-full" />
+                <Skeleton night className="h-24" />
+              </div>
+            ) : (
+              <>
+                <div className="flex items-baseline gap-2">
+                  <span className="tabular font-display text-[72px] leading-[0.85] text-white">{rec.recommended_quantity}</span>
+                  <span className="text-[15px] font-medium text-night-ink/60">lbs</span>
+                </div>
+                <p className="tabular mt-3 text-[13.5px] text-night-ink/70">
+                  at {money(rec.current_price)}
+                  {unit}, <b className="font-semibold text-white">{money(rec.total_cost)}</b> in total
+                </p>
+                <dl className="mt-5 grid grid-cols-3 gap-2">
+                  <NightStat label="On hand" value={`${rec.current_stock}`} note="lbs" />
+                  <NightStat label="Cover" value={rec.current_days_left.toFixed(1)} note="days" />
+                  <NightStat label="Trend" value={rec.price_trend === 'stable' ? 'Flat' : `${rec.trend_percentage > 0 ? '+' : ''}${rec.trend_percentage.toFixed(1)}%`} note="7 days" />
+                </dl>
+                <p className="mt-4 text-[13px] leading-relaxed text-night-ink/70">
+                  {reason.tag && <b className="font-semibold text-white">{reason.tag}. </b>}
+                  {reason.text}
+                </p>
+                <div className="mt-auto pt-5">
+                  <Button variant="night" icon={ShoppingCart} loading={ordering} onClick={placeOrder} className="w-full" disabled={rec.recommended_quantity <= 0}>
+                    Place order for {rec.recommended_quantity} lbs
+                  </Button>
+                  {ordered && (
+                    <p role="status" className="mt-3 text-[12.5px] text-night-ink/80">
+                      {ordered}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
+
         {/* Log stock */}
-        <Card>
-          <CardHeader title="Log stock" subtitle={tracked ? 'Update today’s count for this item.' : 'Add an item to start tracking it.'} />
-          <form onSubmit={saveStock} className="space-y-4 px-5 pb-5">
-            <label className="block">
-              <span className="mb-1.5 block text-[12.5px] font-semibold text-ink">Item</span>
-              <Select value={selectedCommodity} onChange={(e) => setSelectedCommodity(e.target.value)} aria-label="Item">
-                {commodities.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </Select>
-            </label>
+        <Card label="Log stock" className="lg:col-span-4">
+          <CardHeader title="Log stock" subtitle={tracked ? `Update today's count for ${label.toLowerCase()}.` : `Start tracking ${label.toLowerCase()}.`} action={<ProduceIcon commodity={selectedCommodity} size={36} bubble />} />
+          <form onSubmit={saveStock} className="space-y-4 px-5 pb-5 sm:px-6">
             <div className="grid grid-cols-2 gap-3">
               <Field label="In stock" type="number" inputMode="decimal" min={0} step="any" suffix="lbs" placeholder="40" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} />
               <Field label="Daily use" type="number" inputMode="decimal" min={0} step="any" suffix="lbs" placeholder="12" value={form.usage} onChange={(e) => setForm({ ...form, usage: e.target.value })} />
@@ -138,162 +274,90 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
               value={form.capacity}
               onChange={(e) => setForm({ ...form, capacity: e.target.value })}
             />
-            {notice && (notice.tone === 'bad' ? <ErrorNote>{notice.text}</ErrorNote> : <p className="flex items-center gap-2 text-[13px] font-semibold text-good"><CheckCircle2 className="h-4 w-4" />{notice.text}</p>)}
+            <div className="flex items-end justify-between gap-3">
+              <ZipCodeInput compact />
+              <span className="text-[11.5px] text-faint">Weather shapes the advice</span>
+            </div>
+            {notice &&
+              (notice.tone === 'bad' ? (
+                <ErrorNote>{notice.text}</ErrorNote>
+              ) : (
+                <p role="status" className="flex items-center gap-2 text-[13px] font-semibold text-good">
+                  <CheckCircle2 className="h-4 w-4" />
+                  {notice.text}
+                </p>
+              ))}
             <Button type="submit" variant="primary" icon={PackagePlus} loading={saving} className="w-full">
               {tracked ? 'Update stock' : 'Save stock'}
             </Button>
           </form>
         </Card>
 
-        {/* Recommendation */}
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Recommended order"
-            subtitle={`For ${selectedCommodity}, based on stock, shelf life and next week's prices.`}
-            action={rec && <Pill tone={urgencyTone(rec.urgency)}>{rec.urgency === 'high' ? 'Order today' : rec.urgency === 'medium' ? 'Order this week' : 'No rush'}</Pill>}
-          />
-          <div className="px-5 pb-5">
-            {recommendation.error ? (
-              <ErrorNote>Couldn&apos;t get a recommendation: {recommendation.error}</ErrorNote>
-            ) : !rec ? (
-              <Skeleton className="h-48" />
-            ) : (
-              <div className="grid gap-5 md:grid-cols-[1.1fr_1fr]">
-                <div className="rounded-[18px] bg-side p-5 text-side-ink">
-                  <div className="flex items-center gap-2 text-[12.5px] font-semibold text-side-ink/60">
-                    <Sparkles className="h-4 w-4 text-harvest" /> SmartStock suggests
-                  </div>
-                  <div className="mt-2 flex items-baseline gap-2">
-                    <span className="tabular text-[44px] font-semibold leading-none tracking-[-0.03em] text-white">{rec.recommended_quantity}</span>
-                    <span className="text-[16px] font-semibold text-side-ink/70">lbs</span>
-                  </div>
-                  <div className="tabular mt-2 text-[14px] text-side-ink/80">
-                    at {money(rec.current_price)}{unit} · <b className="font-semibold text-white">{money(rec.total_cost)}</b> total
-                  </div>
-                  <Button variant="harvest" icon={ShoppingCart} loading={ordering} onClick={placeOrder} className="mt-5 w-full" disabled={rec.recommended_quantity <= 0}>
-                    Place order for {rec.recommended_quantity} lbs
-                  </Button>
-                  {ordered && <p className="mt-3 text-[12.5px] text-side-ink/80">{ordered}</p>}
-                </div>
-                <div className="flex flex-col gap-4">
-                  <div className="grid grid-cols-3 gap-2">
-                    <MiniStat label="On hand" value={`${rec.current_stock} lbs`} />
-                    <MiniStat label="Cover" value={`${rec.current_days_left.toFixed(1)} d`} />
-                    <MiniStat label="Trend" value={rec.price_trend === 'stable' ? 'Steady' : `${rec.trend_percentage > 0 ? '+' : ''}${rec.trend_percentage.toFixed(1)}%`} />
-                  </div>
-                  <div>
-                    {reason.tag && <Pill tone={/critical|urgent/i.test(reason.tag) ? 'bad' : /low|soon/i.test(reason.tag) ? 'warn' : 'info'} dot={false}>{reason.tag}</Pill>}
-                    <p className="mt-2 text-[13.5px] leading-relaxed text-muted">{reason.text}</p>
-                  </div>
-                  {rec.weather_impact && <p className="border-t border-line pt-3 text-[12.5px] leading-relaxed text-faint">{rec.weather_impact.explanation}</p>}
-                </div>
-              </div>
-            )}
-          </div>
-        </Card>
-
-        {/* 7-day outlook */}
-        <Card className="lg:col-span-2">
+        {/* Best day to buy */}
+        <Card label="Best day to buy" className="flex flex-col lg:col-span-4">
           <CardHeader
             title="Best day to buy"
             subtitle={
               cheapest >= 0
-                ? `${selectedCommodity} is cheapest ${prices[cheapest].day === 'Today' ? 'today' : `on ${prices[cheapest].day}`}, ${money(spread)}${unit} below the week's high.`
-                : prices.length
-                ? `${selectedCommodity} holds near ${money(prices[0].price)}${unit} all week, so order when it suits your deliveries.`
+                ? `${money(spread)}${unit} less than the week's high.`
+                : prices7.length
+                ? 'Flat all week, so order when it suits your deliveries.'
                 : 'Predicted price for each of the next seven days.'
             }
-            action={
-              rows.length > 1 && (
-                <Segmented
-                  label="Tracked item"
-                  value={rows.some((r) => r.ingredient === selectedCommodity) ? selectedCommodity : rows[0].ingredient}
-                  onChange={setSelectedCommodity}
-                  options={rows.slice(0, 4).map((r) => ({ value: r.ingredient, label: r.ingredient }))}
-                />
-              )
-            }
           />
-          <div className="h-[260px] px-3 pb-4">
-            {prices.length ? (
-              <Chart
-                data={[
-                  {
-                    x: prices.map((p) => p.day),
-                    y: prices.map((p) => p.price),
-                    type: 'bar',
-                    marker: { color: prices.map((_, i) => (i === cheapest ? CHART.brass : CHART.primary)) },
-                    hovertemplate: `%{x}: $%{y:.2f}${unit}<extra></extra>`,
-                  },
-                ]}
-                layout={{
-                  yaxis: { tickprefix: '$', tickformat: '.2f', range: [Math.min(...prices.map((p) => p.price)) * (flat ? 0.8 : 0.97), Math.max(...prices.map((p) => p.price)) * (flat ? 1.1 : 1.02)] },
-                  hovermode: 'closest',
-                }}
+          <div className="flex-1 px-4 pb-5 sm:px-5">
+            {week.error ? (
+              <ErrorNote>Couldn&apos;t load the week: {week.error}</ErrorNote>
+            ) : prices7.length ? (
+              <Bars
+                data={prices7.map((p, i) => ({ key: p.day, label: i === 0 ? 'Today' : dayName(i), value: p.price, highlight: i === cheapest, note: `${i === 0 ? 'Today' : dayName(i)}: ${money(p.price)}${unit}` }))}
+                baseline="auto"
+                height={220}
+                color="#2e6a4e"
+                showValues
+                animKey={selectedCommodity}
+                label={`${label} predicted price for the next seven days${cheapest >= 0 ? `, cheapest ${dayName(cheapest)}` : ''}.`}
               />
             ) : (
-              <Skeleton className="h-full" />
+              <Skeleton className="h-[220px]" />
             )}
           </div>
         </Card>
 
-        {/* Weather */}
-        <Card>
-          <CardHeader title="Weather at your kitchen" subtitle="Growing conditions shift next week's prices." />
-          <div className="px-5 pb-5">
-            <ZipCodeInput />
-            <ul className="mt-4 divide-y divide-line">
-              {weather.data
-                ? weather.data.forecast.slice(0, 6).map((d) => {
-                    const Icon = weatherIcon(d.condition);
-                    return (
-                      <li key={d.date} className="flex items-center gap-3 py-2 text-[13px]">
-                        <span className="w-10 font-semibold text-muted">{new Date(`${d.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                        <Icon className="h-4 w-4 text-muted" />
-                        <span className="flex-1 truncate text-muted">{d.condition}</span>
-                        <span className="flex items-center gap-1 text-faint">
-                          <Droplets className="h-3.5 w-3.5" />
-                          {Math.round(d.humidity)}%
-                        </span>
-                        <span className="tabular w-16 text-right font-semibold">
-                          {Math.round(d.temp_high)}° <span className="font-medium text-faint">{Math.round(d.temp_low)}°</span>
-                        </span>
-                      </li>
-                    );
-                  })
-                : [0, 1, 2, 3].map((i) => <Skeleton key={i} className="my-2 h-7" />)}
-            </ul>
-            {weather.data?.source && <WeatherCredit />}
-          </div>
-        </Card>
-
         {/* Walk-in */}
-        <Card className="lg:col-span-3">
-          <CardHeader title="In the walk-in" subtitle="Select an item to update its count or see its order plan." />
-          {rows.length === 0 ? (
-            <Empty icon={PackageOpen} title="Nothing tracked yet" body="Log stock for your first item above. SmartStock keeps up to four items in this demo." />
+        <Card label="In the walk-in" className="flex flex-col lg:col-span-4">
+          <CardHeader title="In the walk-in" subtitle="Select an item to update it or see its order." />
+          {inventory.loading && !rows.length ? (
+            <div className="space-y-2 px-5 pb-5">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-14" />
+              ))}
+            </div>
+          ) : rows.length === 0 ? (
+            <Empty icon={PackageOpen} title="Nothing tracked yet" body="Log stock for your first item. The demo keeps up to four items." />
           ) : (
-            <ul className="grid gap-2 px-4 pb-4 sm:grid-cols-2 xl:grid-cols-4">
+            <ul className="space-y-1 px-3 pb-4">
               {rows.map((r) => {
                 const active = r.ingredient === selectedCommodity;
                 return (
                   <li key={r.id}>
                     <button
+                      type="button"
                       onClick={() => setSelectedCommodity(r.ingredient)}
-                      className={`w-full rounded-tile border p-3.5 text-left transition-colors ${active ? 'border-primary/40 bg-primary/[0.05] ring-1 ring-primary/20' : 'border-line hover:bg-surface-2'}`}
+                      aria-pressed={active}
+                      className={`flex w-full items-center gap-3 rounded-tile px-2.5 py-2 text-left transition-colors ${active ? 'bg-accent/[0.07] ring-1 ring-accent/25' : 'hover:bg-surface-2'}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <ProduceTile name={r.ingredient} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[14px] font-semibold">{r.ingredient}</div>
-                          <div className="text-[12.5px] text-muted">{num(r.days_left).toFixed(1)} days of cover</div>
-                        </div>
-                        <Pencil className="h-4 w-4 text-faint" />
-                      </div>
-                      <div className="mt-3 flex items-center justify-between">
-                        <Pill tone={statusTone(r.status_color)}>{statusLabel(r.status)}</Pill>
-                        <span className="tabular text-[12.5px] text-muted">{r.current_stock}</span>
-                      </div>
+                      <ProduceIcon commodity={r.ingredient} size={36} bubble decorative />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-1.5">
+                          <span className="tabular font-display text-[20px] leading-none">{num(r.days_left).toFixed(1)}</span>
+                          <span className="text-[12px] text-muted">days</span>
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11.5px] text-faint">
+                          {r.ingredient}, {r.current_stock}
+                        </span>
+                      </span>
+                      <Pill tone={statusTone(r.status_color)}>{statusLabel(r.status)}</Pill>
                     </button>
                   </li>
                 );
@@ -306,11 +370,12 @@ export default function OrderingTab({ onInventoryChange }: { onInventoryChange?:
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function NightStat({ label, value, note }: { label: string; value: string; note: string }) {
   return (
-    <div className="rounded-tile bg-surface-2 px-3 py-2.5">
-      <div className="text-[12px] text-muted">{label}</div>
-      <div className="tabular mt-0.5 text-[15px] font-semibold">{value}</div>
+    <div className="rounded-[14px] bg-white/[0.06] px-3 py-2.5">
+      <dt className="micro text-night-ink/55">{label}</dt>
+      <dd className="tabular mt-1 font-display text-[22px] leading-none text-white">{value}</dd>
+      <dd className="mt-0.5 text-[11px] text-night-ink/55">{note}</dd>
     </div>
   );
 }
