@@ -67,9 +67,15 @@ export default function DashboardTab() {
   }, [week.data]);
 
   const studio = active.data?.items?.find((i) => i.commodity === selectedCommodity) ?? active.data?.items?.[0];
+  // The applied studio forecast, only for weeks after the newest real price: after a data refresh its earlier
+  // weeks are history, and if none are left the cone falls back to the built-in model instead of a stale line
+  const lastActual = series.actual.length ? series.actual[series.actual.length - 1].date : '';
   const studioForecast = useMemo<RangePoint[]>(
-    () => (studio?.commodity === selectedCommodity ? studio.forecast.map((p) => ({ date: p.date.slice(0, 10), value: p.yhat, lo: p.lo, hi: p.hi })) : []),
-    [studio, selectedCommodity]
+    () =>
+      studio?.commodity === selectedCommodity
+        ? studio.forecast.map((p) => ({ date: p.date.slice(0, 10), value: p.yhat, lo: p.lo, hi: p.hi })).filter((p) => p.date > lastActual)
+        : [],
+    [studio, selectedCommodity, lastActual]
   );
 
   const heroForecast = period === 'week' ? weekForecast : series.monthForecast;

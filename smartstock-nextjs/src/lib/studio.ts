@@ -70,7 +70,8 @@ export interface HistoryPoint {
 
 export interface BacktestPoint {
   date: string;
-  actual: number;
+  /** null when USDA published no report for that week (the backend never scores those weeks) */
+  actual: number | null;
   predicted: number;
   lo: number;
   hi: number;
