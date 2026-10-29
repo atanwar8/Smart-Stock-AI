@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.routing import APIRoute
 
 import main
+from store.db import make_engine
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,3 +42,21 @@ def test_the_function_bundle_keeps_the_data_it_reads():
     for needed in ("usda_commodity.csv", "ingredient_storage_data.csv", "Example_Train.csv"):
         assert (ROOT / needed).exists() and needed not in excluded
     assert len(excluded) <= 256  # Vercel rejects a longer excludeFiles pattern
+
+
+SESSION_POOLER = "postgresql://postgres.ref:pw@aws-1-us-west-2.pooler.supabase.com:5432/postgres"
+
+
+def test_on_vercel_the_store_uses_supabases_transaction_pooler(monkeypatch):
+    # Session mode allows 15 clients in all; short-lived functions exhausted it in production (EMAXCONNSESSION)
+    monkeypatch.setenv("VERCEL", "1")
+    engine, backend = make_engine(SESSION_POOLER)
+    assert backend == "supabase" and engine.url.port == 6543 and engine.pool.size() == 2
+    engine.dispose()
+
+
+def test_elsewhere_the_session_pooler_url_is_used_as_given(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    engine, _ = make_engine(SESSION_POOLER)
+    assert engine.url.port == 5432 and engine.pool.size() == 5
+    engine.dispose()

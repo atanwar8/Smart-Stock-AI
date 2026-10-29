@@ -94,14 +94,23 @@ def make_engine(url: Optional[str] = None, sqlite_path: Optional[Path] = None) -
             if url.startswith(prefix):
                 url = "postgresql+psycopg://" + url[len(prefix):]
         parsed = make_url(url)
+        serverless = bool(os.getenv("VERCEL"))
+        if serverless and (parsed.host or "").endswith("pooler.supabase.com") and parsed.port in (None, 5432):
+            # Session mode gives every client its own server connection (15 in all on Supabase's free plan), and
+            # many short-lived function instances, plus any other host still connected, use them up
+            # ("EMAXCONNSESSION max clients reached"). The transaction pooler on 6543, same host and password,
+            # lends a server connection per transaction instead. The refresh lock is transaction-scoped
+            # (exclusive), so it works there too.
+            parsed = parsed.set(port=6543)
         connect_args = {"connect_timeout": 10}
         if "sslmode" not in parsed.query:
             connect_args["sslmode"] = "require"
         if parsed.port == 6543:
             # Supavisor's transaction pooler can't keep server-side prepared statements between transactions
             connect_args["prepare_threshold"] = None
-        engine = create_engine(url, pool_size=5, max_overflow=5, pool_pre_ping=True, pool_recycle=300,
-                               connect_args=connect_args)
+        # A function instance serves few requests at a time and Supavisor does the real pooling: keep a small pool
+        pool = {"pool_size": 2, "max_overflow": 3} if serverless else {"pool_size": 5, "max_overflow": 5}
+        engine = create_engine(parsed, pool_pre_ping=True, pool_recycle=300, connect_args=connect_args, **pool)
         return engine, "supabase"
 
     path = Path(sqlite_path or os.getenv("SMARTSTOCK_DB_PATH") or DEFAULT_SQLITE_PATH)
