@@ -1,6 +1,7 @@
 """The incremental refresh: only new weeks are requested, rows are appended (never replaced wholesale), re-runs add
 nothing, missing keys and USDA errors are recorded instead of crashing, and training covers every stored week."""
 
+import time
 from datetime import date, timedelta
 
 import pandas as pd
@@ -100,6 +101,24 @@ def test_training_stores_forecasts_so_previews_never_fit_a_model(store, monkeypa
     monkeypatch.setattr(service, "evaluate", refuse)
     body = service.preview("Tomatoes", "ets", horizon_weeks=8)
     assert [p["yhat"] for p in body["forecast"]] == pytest.approx(run["params"]["future"], rel=1e-6)
+
+
+def test_startup_waits_for_a_busy_training_lock_instead_of_skipping(store, monkeypatch):
+    """On a deploy the old instance holds the lock until it is stopped; the new one must train after that."""
+    import threading
+    monkeypatch.setattr(pipeline, "LOCK_RETRY_SECONDS", 0.05)
+    assert store._local_lock.acquire(blocking=False)   # "another process" is training
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(pipeline.prepare_store()))
+    worker.start()
+    try:
+        time.sleep(0.3)
+        assert worker.is_alive() and service.TRAINING.is_set()   # waiting, and previews say "being trained"
+    finally:
+        store._local_lock.release()                     # the old instance stops
+    worker.join(300)
+    assert "trained" in result and not pipeline.needs_training(store)
+    assert not service.TRAINING.is_set()
 
 
 def test_usda_rejecting_the_key_fails_the_run_without_touching_data(store, monkeypatch):

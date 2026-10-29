@@ -15,6 +15,7 @@ Progress lives in this process's memory (the status page polls it); the durable 
 
 import os
 import threading
+import time
 import traceback
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -31,6 +32,10 @@ from ml.series import build_panel, tracked_commodities
 from store import get_store
 
 LOCK_NAME = "smartstock:refresh"
+# At startup, if another process holds the training lock (on a deploy, the old instance keeps running until the
+# new one is healthy), retry this often until it is free, for at most this long
+LOCK_RETRY_SECONDS = 15
+STARTUP_WAIT_SECONDS = 30 * 60
 STEPS = ("extract", "load", "train", "test", "done")
 
 
@@ -78,11 +83,8 @@ def train_and_test(store=None, ingest_run_id: Optional[int] = None,
     While it runs, service.TRAINING is set and previews without a stored run answer 503 instead of training.
     progress(step, fraction, message) reports where it is ('train' while fitting, 'test' while scoring/writing).
     """
-    service.TRAINING.set()
-    try:
+    with service.TRAINING:
         return _train_and_test(store or get_store(), ingest_run_id, progress)
-    finally:
-        service.TRAINING.clear()
 
 
 def _train_and_test(store, ingest_run_id, progress) -> Dict:
@@ -239,16 +241,41 @@ def needs_training(store) -> bool:
     return False
 
 
+def _train_when_free(store) -> Optional[Dict]:
+    """Train if the stored runs are missing or stale, waiting for the training lock if another process holds it.
+
+    Giving up when the lock was taken left a fresh deploy with no models: the old instance held the lock until it
+    was stopped, and the new one never tried again. Re-checking after each wait also covers the other process
+    finishing the job itself (then there is nothing left to train here).
+    """
+    deadline = time.monotonic() + STARTUP_WAIT_SECONDS
+    while needs_training(store):
+        with store.exclusive(LOCK_NAME) as got:
+            if got:
+                return train_and_test(store) if needs_training(store) else None
+        if time.monotonic() > deadline:
+            print("⚠️ Training store: another process held the training lock for too long; not training here.")
+            return None
+        print(f"🗄️ Training store: another process is training; checking again in {LOCK_RETRY_SECONDS} s")
+        time.sleep(LOCK_RETRY_SECONDS)
+    return None
+
+
 def prepare_store() -> Dict:
     """Startup housekeeping: close runs a crashed process left 'running', seed an empty store, drop stale previews,
     and train the models if no stored run matches the data stored now (first start, or runs from an older
-    version of the pipeline), so the studio has results to read."""
+    version of the pipeline), so the studio has results to read.
+
+    The whole of it counts as training (service.TRAINING): a preview that arrives before the models are ready gets
+    the "being trained" answer and the studio retries, instead of fitting a model on demand next to the training.
+    """
     from store.seed import seed_if_empty
-    store = get_store()
-    report = {"stale_runs_failed": store.fail_stale_runs(), "seed": seed_if_empty(store),
-              "previews_pruned": store.prune_previews()}
-    if os.getenv("PIPELINE_TRAIN_ON_STARTUP", "1") == "1" and needs_training(store):
-        with store.exclusive(LOCK_NAME) as got:
-            if got and needs_training(store):
-                report["trained"] = train_and_test(store)
-    return report
+    with service.TRAINING:
+        store = get_store()
+        report = {"stale_runs_failed": store.fail_stale_runs(), "seed": seed_if_empty(store),
+                  "previews_pruned": store.prune_previews()}
+        if os.getenv("PIPELINE_TRAIN_ON_STARTUP", "1") == "1":
+            trained = _train_when_free(store)
+            if trained:
+                report["trained"] = trained
+        return report
