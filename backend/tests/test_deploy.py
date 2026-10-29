@@ -40,3 +40,4 @@ def test_the_function_bundle_keeps_the_data_it_reads():
     excluded = json.loads((ROOT / "vercel.json").read_text())["functions"]["api/index.py"]["excludeFiles"]
     for needed in ("usda_commodity.csv", "ingredient_storage_data.csv", "Example_Train.csv"):
         assert (ROOT / needed).exists() and needed not in excluded
+    assert len(excluded) <= 256  # Vercel rejects a longer excludeFiles pattern

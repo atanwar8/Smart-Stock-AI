@@ -8,7 +8,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
-      "excludeFiles": "{smartstock-nextjs/**,docs/**,supabase/**,promo-video/**,.github/**,backend/tests/**,backend/var/**,backend/.venv/**,backend/.venv-ml/**,backend/.pytest_cache/**,**/__pycache__/**,**/node_modules/**,Example.csv,Example_Train_backup_*.csv,processed_usda_vegetables_*.csv,Test.html,Latest_App_Streamlit.py,train_test_updater.py,backend/start_backend.py}"
+      "excludeFiles": "{smartstock-nextjs/**,docs/**,supabase/**,.github/**,backend/tests/**,Example.csv,Example_Train_backup_*.csv,processed_usda_vegetables_*.csv,Test.html,Latest_App_Streamlit.py,train_test_updater.py}"
     }
   },
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
