@@ -19,10 +19,10 @@ router = APIRouter(tags=["forecast"])
 class PreviewRequest(BaseModel):
     commodity: str
     model: str = service.DEFAULT_MODEL
-    horizon_weeks: int = Field(8, ge=1, le=26)
+    horizon_weeks: int = Field(1, ge=1, le=8)          # weeks ahead: next week by default, two months at most
     confidence: float = Field(0.8, ge=0.5, le=0.95)
-    history_years: Optional[float] = Field(2, ge=1, le=15)   # null = everything stored
     pace_pct: float = Field(0, ge=-40, le=60)
+    # Models always learn from every stored week; a history_years sent by older clients is ignored
 
 
 class ApplyRequest(BaseModel):
@@ -67,7 +67,7 @@ def forecast_leaderboard(commodity: str = Query(..., min_length=1)):
 @router.post("/forecast/preview")
 def forecast_preview(request: PreviewRequest):
     return _answer(service.preview, request.commodity, request.model, request.horizon_weeks, request.confidence,
-                   request.history_years, request.pace_pct)
+                   request.pace_pct)
 
 
 @router.post("/forecast/apply")

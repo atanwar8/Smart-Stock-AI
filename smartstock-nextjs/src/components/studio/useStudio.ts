@@ -27,6 +27,8 @@ import {
 import type { CompareSeries } from './chartGeometry';
 
 const DEBOUNCE_MS = 350;
+// How often the studio re-asks while the backend is still training its models (503)
+const TRAINING_RETRY_MS = 10_000;
 const NO_LINES: CompareSeries[] = [];
 const COMPARE_COLORS = ['#9a8466', '#6f8fa6', '#a8737d', '#7f8f58', '#8f78b3', '#5f9690', '#b0894f'];
 
@@ -59,6 +61,8 @@ function previewError(error: unknown): { message: string; code: number | null } 
   if (code === 404) return { code, message: `Nothing to forecast yet: ${errorDetail(error)}` };
   if (code === 409) return { code, message: `That model can’t run right now: ${errorDetail(error)}` };
   if (code === 422) return { code, message: 'Those settings are outside what the model accepts. Nudge a knob and try again.' };
+  // The backend trains every model ahead of time (after a deploy or a data refresh); the studio retries on its own
+  if (code === 503) return { code, message: errorDetail(error) };
   return { code, message: `The model stumbled (${code}). Try again, or pick another model.` };
 }
 
@@ -117,6 +121,7 @@ export function useStudio(commodity: string) {
   // ---- leaderboard + applied forecast for the selected produce (cached per produce) ----
   const boardsRef = useRef(boards);
   boardsRef.current = boards;
+  const [boardNonce, setBoardNonce] = useState(0);
   useEffect(() => {
     const cached = boardsRef.current[commodity];
     if (cached && cached.status !== 'error') return;
@@ -126,7 +131,15 @@ export function useStudio(commodity: string) {
       .then((data) => setBoards((b) => ({ ...b, [commodity]: { status: 'ready', data } })))
       .catch((error) => !isAbortError(error) && setBoards((b) => ({ ...b, [commodity]: loadError(error) })));
     return () => controller.abort();
-  }, [commodity]);
+  }, [commodity, boardNonce]);
+
+  // While the backend is still training (503), ask again every 10 s until the leaderboard is ready
+  const boardTraining = boards[commodity]?.status === 'error' && (boards[commodity] as { code?: number | null }).code === 503;
+  useEffect(() => {
+    if (!boardTraining) return;
+    const id = window.setTimeout(() => setBoardNonce((n) => n + 1), TRAINING_RETRY_MS);
+    return () => window.clearTimeout(id);
+  }, [boardTraining]);
 
   const refreshActive = useCallback((name: string, signal?: AbortSignal) => {
     fetchActive(name, signal)
@@ -212,6 +225,14 @@ export function useStudio(commodity: string) {
   const generate = useCallback(() => {
     if (requestRef.current) void runPreview(requestRef.current);
   }, [runPreview]);
+
+  // Same for the sample: while the backend trains, retry every 10 s instead of leaving an error on screen
+  const sampleTraining = sample.error?.code === 503;
+  useEffect(() => {
+    if (!sampleTraining) return;
+    const id = window.setTimeout(generate, TRAINING_RETRY_MS);
+    return () => window.clearTimeout(id);
+  }, [sampleTraining, generate]);
 
   const discard = useCallback(() => {
     window.clearTimeout(timer.current);

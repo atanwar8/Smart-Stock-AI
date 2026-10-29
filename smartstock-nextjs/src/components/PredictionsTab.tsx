@@ -197,7 +197,6 @@ export default function PredictionsTab() {
               onGenerate={studio.generate}
               generating={sample.loading}
               lastDate={shown?.history[shown.history.length - 1]?.date ?? boardData?.test_end}
-              trainedWeeks={shown && shown.params.history_years === params.history_years ? shown.train_window.weeks : undefined}
               compareOn={studio.compareOn}
               compareLoading={studio.compareLoading}
               onCompare={studio.toggleCompare}

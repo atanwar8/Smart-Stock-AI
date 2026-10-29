@@ -85,6 +85,23 @@ def test_refresh_asks_only_for_weeks_after_the_newest_stored_one_and_appends(sto
     assert latest["ets"]["train_start"] <= "2023-08-04"
 
 
+def test_training_stores_forecasts_so_previews_never_fit_a_model(store, monkeypatch):
+    monkeypatch.delenv("MARS_API_KEY", raising=False)
+    assert pipeline.needs_training(store)
+    run_refresh()
+    assert not pipeline.needs_training(store)
+    run = store.latest_training_runs("Tomatoes")["Tomatoes"]["ets"]
+    assert run["params"]["version"] == 2 and len(run["params"]["future"]) == 8
+
+    # With stored runs, a preview reads them: fitting or backtesting now would be a bug
+    def refuse(*args, **kwargs):
+        raise AssertionError("a preview fitted or tested a model")
+    monkeypatch.setattr(service, "forecast_path", refuse)
+    monkeypatch.setattr(service, "evaluate", refuse)
+    body = service.preview("Tomatoes", "ets", horizon_weeks=8)
+    assert [p["yhat"] for p in body["forecast"]] == pytest.approx(run["params"]["future"], rel=1e-6)
+
+
 def test_usda_rejecting_the_key_fails_the_run_without_touching_data(store, monkeypatch):
     monkeypatch.setenv("MARS_API_KEY", "bad-key")
 

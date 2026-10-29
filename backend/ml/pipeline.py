@@ -71,11 +71,21 @@ def live_models() -> List[str]:
 
 def train_and_test(store=None, ingest_run_id: Optional[int] = None,
                    progress: Optional[Callable[[str, float, str], None]] = None) -> Dict:
-    """Backtest every live model on every tracked vegetable and store the scores. Returns a summary.
+    """Backtest every live model on every tracked vegetable, fit each on all stored weeks, and store the scores
+    together with each model's MAX_HORIZON-week forecast path (params["future"]). Returns a summary.
 
+    This is the only place models are trained: the studio reads these runs, so a preview never fits a model.
+    While it runs, service.TRAINING is set and previews without a stored run answer 503 instead of training.
     progress(step, fraction, message) reports where it is ('train' while fitting, 'test' while scoring/writing).
     """
-    store = store or get_store()
+    service.TRAINING.set()
+    try:
+        return _train_and_test(store or get_store(), ingest_run_id, progress)
+    finally:
+        service.TRAINING.clear()
+
+
+def _train_and_test(store, ingest_run_id, progress) -> Dict:
     panel = build_panel(store.read_prices(region=SERIES_REGION))
     models = live_models()
     shared = {"lightgbm": LightGBMGlobal()}   # global model: one set of boosters serves every vegetable
@@ -97,7 +107,11 @@ def train_and_test(store=None, ingest_run_id: Optional[int] = None,
         best = champion(evals)
         champions[name] = best
         for model_id, ev in evals.items():
-            row = ev.training_run(source="pipeline", history_years=None)
+            # The forecast the studio will show: this model fit on every stored week (the shared LightGBM's
+            # booster for the last week is already cached by the backtest, so this is cheap)
+            future = service.forecast_path(model_id, series, panel, ev.weights, shared["lightgbm"])
+            row = ev.training_run(source="pipeline", history_years=None,
+                                  extra={"future": [round(float(v), 4) for v in future]})
             row.update(ingest_run_id=ingest_run_id, is_champion=(model_id == best))
             rows.append(row)
     if progress:
@@ -211,15 +225,30 @@ def runs(limit: int = 20, offset: int = 0) -> Dict:
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+def needs_training(store) -> bool:
+    """True if any tracked vegetable lacks a current training run (scored on its newest stored week by this
+    version of the pipeline, see backtest.STORE_VERSION)."""
+    from ml.backtest import STORE_VERSION
+    panel = build_panel(store.read_prices(region=SERIES_REGION))
+    latest = store.latest_training_runs()
+    for name, series in panel.items():
+        last = series.dates[-1].date().isoformat()
+        runs = latest.get(name, {}).values()
+        if not any(r.get("test_end") == last and (r.get("params") or {}).get("version", 1) >= STORE_VERSION for r in runs):
+            return True
+    return False
+
+
 def prepare_store() -> Dict:
     """Startup housekeeping: close runs a crashed process left 'running', seed an empty store, drop stale previews,
-    and score the models once if the store has never been trained (so the leaderboard isn't empty)."""
+    and train the models if no stored run matches the data stored now (first start, or runs from an older
+    version of the pipeline), so the studio has results to read."""
     from store.seed import seed_if_empty
     store = get_store()
     report = {"stale_runs_failed": store.fail_stale_runs(), "seed": seed_if_empty(store),
               "previews_pruned": store.prune_previews()}
-    if os.getenv("PIPELINE_TRAIN_ON_STARTUP", "1") == "1" and not store.has_training_runs():
+    if os.getenv("PIPELINE_TRAIN_ON_STARTUP", "1") == "1" and needs_training(store):
         with store.exclusive(LOCK_NAME) as got:
-            if got and not store.has_training_runs():
+            if got and needs_training(store):
                 report["trained"] = train_and_test(store)
     return report

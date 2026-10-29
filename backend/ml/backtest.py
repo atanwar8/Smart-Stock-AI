@@ -26,6 +26,9 @@ from ml.models import ENSEMBLE_CANDIDATES, create, ensemble_weights
 from ml.series import WeeklySeries
 
 MAX_ORIGINS = 78   # bound the cost as the store grows: the newest 1.5 years of origins are plenty
+# Training runs written before this version lack the stored forecast path (params["future"]) or used a 26-week
+# horizon; the studio ignores them and the startup check retrains (ml.pipeline.prepare_store).
+STORE_VERSION = 2
 
 
 @dataclass
@@ -103,7 +106,7 @@ class ModelEval:
     def training_run(self, source: str = "pipeline", history_years=None, extra: Optional[Dict] = None) -> Dict:
         """The training_runs row for this (commodity, model)."""
         params = {
-            "version": 1, "source": source, "history_years": history_years, "test_weeks": self.plan.test_weeks,
+            "version": STORE_VERSION, "source": source, "history_years": history_years, "test_weeks": self.plan.test_weeks,
             "horizon": self.plan.horizon, "min_context": self.plan.min_context, "n_origins": int(len(self.plan.origins)),
             "backtest": self.backtest, "test_levels": [round(v, 4) for v in self.test_levels],
             "calib_levels": [float(v) for v in intervals.LEVELS],
