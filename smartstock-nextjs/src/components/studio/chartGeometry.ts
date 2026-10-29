@@ -45,7 +45,8 @@ export interface Geometry {
   activeLine: string;
   activeEnd: { x: number; y: number } | null;
   compare: { id: string; color: string; d: string }[];
-  backtest: { x: number; yActual: number; yPredicted: number; inside: boolean }[];
+  /** yActual is null for a hold-out week USDA didn't report: nothing real to draw there */
+  backtest: { x: number; yActual: number | null; yPredicted: number; inside: boolean }[];
   holdout: { x0: number; x1: number } | null;
   today: { x: number; date: string } | null;
   yTicks: { y: number; label: string }[];
@@ -116,8 +117,18 @@ function niceStep(range: number, count: number) {
 const MONTH = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short' });
 const MONTH_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', year: '2-digit' });
 
+const isPrice = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v);
+
 export function buildGeometry(data: ChartData, width: number, height: number): Geometry {
   const compact = width < 520;
+
+  // The newest week with a real price. An applied forecast is only drawn for weeks after it: its earlier weeks
+  // are now history (e.g. a forecast applied before a data refresh), and drawing them stretched the time axis
+  // back to when it was applied, squeezing the real prices into a corner.
+  let lastRealT = -Infinity;
+  for (const p of data.history) lastRealT = Math.max(lastRealT, parseDay(p.date));
+  for (const b of data.backtest) if (isPrice(b.actual)) lastRealT = Math.max(lastRealT, parseDay(b.date));
+  const active = (data.active ?? []).filter((f) => parseDay(f.date) > lastRealT);
   const plot = { left: compact ? 40 : 48, right: width - (compact ? 14 : 20), top: 30, bottom: height - 28 };
 
   // ---- domains ----
@@ -129,13 +140,14 @@ export function buildGeometry(data: ChartData, width: number, height: number): G
   }
   for (const b of data.backtest) {
     times.push(parseDay(b.date));
-    values.push(b.actual, b.predicted, b.lo, b.hi);
+    values.push(b.predicted, b.lo, b.hi);
+    if (isPrice(b.actual)) values.push(b.actual);
   }
   for (const f of data.forecast) {
     times.push(parseDay(f.date));
     values.push(f.lo, f.hi, f.yhat);
   }
-  for (const f of data.active ?? []) {
+  for (const f of active) {
     times.push(parseDay(f.date));
     values.push(f.yhat);
   }
@@ -184,7 +196,9 @@ export function buildGeometry(data: ChartData, width: number, height: number): G
   // ---- real prices ----
   const real = new Map<string, number>();
   for (const p of data.history) real.set(p.date, p.price);
-  for (const b of data.backtest) if (!real.has(b.date)) real.set(b.date, b.actual);
+  // Weeks USDA didn't report (actual null) are left out, so the line joins the reported weeks instead of
+  // dropping to $0
+  for (const b of data.backtest) if (!real.has(b.date) && isPrice(b.actual)) real.set(b.date, b.actual);
   const realPoints = [...real.entries()].sort((a, b) => parseDay(a[0]) - parseDay(b[0]));
   const realXY = realPoints.map(([d, v]) => [xd(d), y(v)] as [number, number]);
   const historyLine = smoothPath(realXY);
@@ -204,7 +218,7 @@ export function buildGeometry(data: ChartData, width: number, height: number): G
   const lastFc = data.forecast[data.forecast.length - 1];
   const forecastEnd = lastFc ? { x: xd(lastFc.date), y: y(lastFc.yhat), label: money(lastFc.yhat) } : null;
 
-  const activeXY = (data.active ?? []).map((f) => [xd(f.date), y(f.yhat)] as [number, number]);
+  const activeXY = active.map((f) => [xd(f.date), y(f.yhat)] as [number, number]);
   const activeLine = smoothPath(anchor && activeXY.length ? [anchor, ...activeXY] : activeXY);
   const activeEnd = activeXY.length ? { x: activeXY[activeXY.length - 1][0], y: activeXY[activeXY.length - 1][1] } : null;
 
@@ -215,7 +229,12 @@ export function buildGeometry(data: ChartData, width: number, height: number): G
   }));
 
   // ---- hold-out ----
-  const backtest = data.backtest.map((b) => ({ x: xd(b.date), yActual: y(b.actual), yPredicted: y(b.predicted), inside: b.actual >= b.lo && b.actual <= b.hi }));
+  const backtest = data.backtest.map((b) => ({
+    x: xd(b.date),
+    yActual: isPrice(b.actual) ? y(b.actual) : null,
+    yPredicted: y(b.predicted),
+    inside: isPrice(b.actual) && b.actual >= b.lo && b.actual <= b.hi,
+  }));
   const weekPx = realXY.length > 1 ? (realXY[realXY.length - 1][0] - realXY[0][0]) / (realXY.length - 1) : 12;
   const holdout = backtest.length ? { x0: Math.max(plot.left, backtest[0].x - weekPx / 2), x1: backtest[backtest.length - 1].x + weekPx / 2 } : null;
   const today = lastReal ? { x: xd(lastReal[0]), date: lastReal[0] } : null;
@@ -247,7 +266,7 @@ export function buildGeometry(data: ChartData, width: number, height: number): G
     t.range = [f.lo, f.hi];
     t.dots.push({ y: y(f.yhat), color: FORECAST });
   }
-  for (const f of data.active ?? []) {
+  for (const f of active) {
     const t = target(f.date);
     t.applied = f.yhat;
     t.dots.push({ y: y(f.yhat), color: APPLIED });

@@ -176,9 +176,14 @@ const Layers = memo(function Layers({ geo, state, revealKey, uid }: { geo: Geome
       {/* hold-out: what the model said (ticks) vs what happened (dots) */}
       {geo.backtest.map((b) => (
         <g key={b.x}>
-          <line x1={b.x} x2={b.x} y1={b.yActual} y2={b.yPredicted} stroke="var(--color-forecast)" strokeOpacity={0.45} strokeWidth={1} />
+          {b.yActual !== null && (
+            <line x1={b.x} x2={b.x} y1={b.yActual} y2={b.yPredicted} stroke="var(--color-forecast)" strokeOpacity={0.45} strokeWidth={1} />
+          )}
           <line x1={b.x - 5} x2={b.x + 5} y1={b.yPredicted} y2={b.yPredicted} stroke="var(--color-forecast)" strokeWidth={2} strokeLinecap="round" />
-          <circle cx={b.x} cy={b.yActual} r={3.4} fill={b.inside ? 'var(--color-accent)' : 'var(--color-warn)'} stroke="var(--color-surface)" strokeWidth={1.5} />
+          {/* no USDA report that week: the prediction tick stays, but there is no real price to compare */}
+          {b.yActual !== null && (
+            <circle cx={b.x} cy={b.yActual} r={3.4} fill={b.inside ? 'var(--color-accent)' : 'var(--color-warn)'} stroke="var(--color-surface)" strokeWidth={1.5} />
+          )}
         </g>
       ))}
 

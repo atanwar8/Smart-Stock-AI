@@ -169,12 +169,17 @@ function backtestFor(series: Series, model: string, confidence: number, weeks: n
   return { rows, sigma };
 }
 
-function metricsFor(series: Series, rows: BacktestPoint[], weeks: number): PreviewMetrics & { rmse: number; smape: number } {
+type Scored = BacktestPoint & { actual: number };
+// Weeks without a report (actual null) are never scored, same as the backend
+const scoredOnly = (rows: BacktestPoint[]) => rows.filter((b): b is Scored => b.actual !== null);
+
+function metricsFor(series: Series, allRows: BacktestPoint[], weeks: number): PreviewMetrics & { rmse: number; smape: number } {
+  const rows = scoredOnly(allRows);
   const errors = rows.map((b) => Math.abs(b.actual - b.predicted));
   const mae = mean(errors);
   const train = series.points.slice(-weeks, -TEST_WEEKS);
   const naiveInSample = mean(train.slice(1).map((p, i) => Math.abs(p.price - train[i].price))) || 0.01;
-  const baseline = mean(backtestFor(series, 'seasonal_naive', 0.8, weeks).rows.map((b) => Math.abs(b.actual - b.predicted))) || 0.01;
+  const baseline = mean(scoredOnly(backtestFor(series, 'seasonal_naive', 0.8, weeks).rows).map((b) => Math.abs(b.actual - b.predicted))) || 0.01;
   return {
     mae: Math.round(mae * 1000) / 1000,
     rmse: Math.round(Math.sqrt(mean(errors.map((e) => e * e))) * 1000) / 1000,
