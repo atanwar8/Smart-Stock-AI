@@ -216,7 +216,7 @@ class Evaluation:
 
     @classmethod
     def from_eval(cls, ev: ModelEval) -> "Evaluation":
-        return cls(model=ev.model, commodity=ev.commodity, unit=ev.unit, metrics=dict(ev.metrics),
+        return cls(model=ev.model, commodity=ev.commodity, unit=ev.unit, metrics={**ev.metrics, "val_mase": ev.val_mase},
                    backtest=list(ev.backtest), test_levels=list(ev.test_levels), calib_test=ev.calib_test,
                    calib_full=ev.calib_full, weights=ev.weights,
                    window={"train_start": ev.train_start, "train_end": ev.train_end,
@@ -306,12 +306,17 @@ def leaderboard(commodity: str) -> Dict:
         ranked = sorted(rows, key=lambda r: (r["mase"] is None, r["mase"] or 0, r["mae"] or 0))
         for rank, row in enumerate(ranked, 1):
             row["rank"] = rank
+        # Champion as the pipeline picks it (ml.backtest.champion): lowest validation MASE on the pre-test weeks,
+        # so its hold-out row above is an honest score rather than the best of six on the same weeks
+        validated = [(e.metrics.get("val_mase"), e.metrics.get("mase") or np.inf, m) for m, e in evals.items()
+                     if e.metrics and e.metrics.get("val_mase") is not None and np.isfinite(e.metrics["val_mase"])]
+        champion_id = min(validated)[2] if validated else (ranked[0]["model"] if ranked else None)
         reference = next((e for e in evals.values() if e.window.get("train_start")), None)
         stamps = [e.created_at for e in evals.values() if e.created_at]
         return {"commodity": commodity, "unit": panel()[commodity].unit,
                 **({k: reference.window[k] for k in ("train_start", "train_end", "test_start", "test_end")} if reference else
                    {"train_start": None, "train_end": None, "test_start": None, "test_end": None}),
-                "test_weeks": TEST_WEEKS, "champion": ranked[0]["model"] if ranked else None,
+                "test_weeks": TEST_WEEKS, "champion": champion_id,
                 "updated_at": max(stamps) if stamps else _now(), "rows": ranked}
 
     return _memo.get(_version(), ("leaderboard", commodity), compute)

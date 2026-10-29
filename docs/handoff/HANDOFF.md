@@ -110,3 +110,15 @@ The user asked to leave Render (slow wake-ups) for Vercel and to make prediction
 4. Update the README's first lines with the production URL; suspend/delete the Render service.
 5. Follow-up: persist inventory and alert settings in Supabase (on Vercel they are per instance and reset on a cold
    start). Optional: `backend/.venv-ml` (1.2 GB, old TimesFM env) can be deleted.
+
+## 2026-10-30: refresh on click only, faster and corrected training (session folder ~/Documents/GitHub/Smart-Stock-AI)
+- The user's rule: data is pulled **only when someone clicks Data refresh** (newest stored week -> today, added to
+  Supabase, then train and test). The weekly Vercel cron and `/pipeline/cron` were removed (`CRON_SECRET` unused).
+- Production on Vercel uses Supabase's transaction pooler (6543) automatically: the session pooler's 15-client limit
+  was exhausted (EMAXCONNSESSION) by function instances plus Render.
+- Math audit (`tests/test_math.py`): weekly series are conventional rows only (organic rows came and went and moved
+  the price up to +137% in a week); gap weeks repeat the last price (linear interpolation leaked the next week into
+  9.2% of backtest origins); champions are chosen on validation MASE, not on the hold-out; the dashboard's 7-day
+  range uses the stored conformal widths. STORE_VERSION 3, so a refresh is needed after deploying.
+- Speed: newest 52 backtest origins (was 78) and LightGBM refit every 8 weeks (was 4): train + test 47 s -> 15 s on
+  a laptop (Vercel measured 74 s before). Results: ETS/Theta/LightGBM mean MASE ~0.77 vs naive 1.03, coverage 0.87.

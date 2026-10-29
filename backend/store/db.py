@@ -282,16 +282,17 @@ class Store:
         return len(new), len(changed)
 
     def read_prices(self, region: Optional[str] = None, commodities: Optional[Iterable[str]] = None) -> pd.DataFrame:
-        """report_date / region / commodity / unit / price for every stored row, in one query."""
+        """report_date / region / commodity / unit / organic / price for every stored row, in one query."""
         query = select(usda_prices.c.report_date, usda_prices.c.region, usda_prices.c.commodity, usda_prices.c.unit,
-                       usda_prices.c.current_wtd_avg_price.label("price")).where(
+                       usda_prices.c.organic, usda_prices.c.current_wtd_avg_price.label("price")).where(
             usda_prices.c.current_wtd_avg_price.isnot(None))
         if region:
             query = query.where(usda_prices.c.region == region)
         if commodities is not None:
             query = query.where(usda_prices.c.commodity.in_(list(commodities)))
         with self.engine.connect() as conn:
-            frame = pd.DataFrame(conn.execute(query).all(), columns=["report_date", "region", "commodity", "unit", "price"])
+            frame = pd.DataFrame(conn.execute(query).all(),
+                                 columns=["report_date", "region", "commodity", "unit", "organic", "price"])
         frame["report_date"] = pd.to_datetime(frame["report_date"])
         frame["price"] = frame["price"].astype(float)
         return frame

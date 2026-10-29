@@ -1,8 +1,12 @@
 """Raw USDA rows -> one regular weekly price series per tracked commodity.
 
-The export repeats each week once per variety and package size, so rows are not a time series. Same rule
-as /commodities: keep the commodity's most common unit, average its rows per report week. Missing weeks are
-filled by linear interpolation so models see a regular grid, but they are flagged and never scored.
+The export repeats each week once per variety, package size and organic flag, so rows are not a time series.
+Same rule as /commodities: conventional rows only, the commodity's most common unit, averaged per report week.
+Organic rows are left out because USDA reports them only some weeks (3-28% of weeks): mixing them in moved
+the weekly price by 1-11% on average and up to +137% in a single week, so the models were partly learning
+whether organic rows happened to be reported. Missing weeks repeat the last reported price (never a value
+interpolated towards a later week, which would leak the future into a backtest started on that week); they are
+flagged and never scored.
 """
 
 import os
@@ -77,6 +81,8 @@ def tracked_commodities(stored: Iterable[str]) -> List[str]:
 def weekly_series(rows: pd.DataFrame, commodity: str) -> Optional[WeeklySeries]:
     """rows: report_date / commodity / unit / price (one region). None if the commodity has too little data."""
     rows = rows[rows["commodity"] == commodity]
+    if "organic" in rows.columns:
+        rows = rows[rows["organic"] != "Yes"]
     if rows.empty:
         return None
     unit = rows["unit"].mode().iloc[0]
@@ -91,7 +97,9 @@ def weekly_series(rows: pd.DataFrame, commodity: str) -> Optional[WeeklySeries]:
     snapped = snapped.groupby(level=0).mean()
     y = snapped.reindex(grid)
     observed = y.notna().to_numpy()
-    y = y.interpolate(method="linear").bfill().ffill().astype(float).rename("price")
+    # Carry the last reported price forward: a gap week must only use weeks before it (the grid starts on a
+    # reported week, so there is never a leading gap)
+    y = y.ffill().astype(float).rename("price")
     return WeeklySeries(commodity, str(unit), y, observed)
 
 

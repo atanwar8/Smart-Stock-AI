@@ -8,9 +8,13 @@ Code: `backend/ml/` (models, backtest, intervals), `backend/ml/service.py` (stud
 - **Source:** USDA MyMarketNews National Retail Report, Specialty Crops (report 3324), stored in the training
   store (`usda_prices`: Supabase Postgres in production, SQLite locally). The store started from the last two years
   of the bundled export (2023-07-28 to 2025-07-25, 6,783 rows), and every refresh appends the weeks published since.
-- **Series:** one weekly price per vegetable, from the Midwest region, in that vegetable's most common unit (per lb,
-  each, per bunch), averaging the varieties and pack sizes reported that week (`ml/series.py`). Missing weeks are
-  interpolated so the models get a regular grid, but they are never scored.
+- **Series:** one weekly price per vegetable, from the Midwest region, **conventional rows only**, in that vegetable's
+  most common unit (per lb, each, per bunch), averaging the varieties and pack sizes reported that week
+  (`ml/series.py`). Organic rows are left out because USDA reports them only some weeks (3–28% of weeks): mixing
+  them in moved the weekly price by 1–11% on average and up to +137% in one week, so models were partly learning
+  whether organic rows happened to be reported. Missing weeks repeat the last reported price, so a forecast started
+  on a gap week never sees a later week (linear interpolation would leak the next price into it). Gap weeks are
+  never scored. The dashboard's daily charts read the same series (`core/forecaster_utils.weekly_prices`).
 - **Vegetables:** the 11 tracked ones in `usda_commodity.csv` (Asparagus, Broccoli, Cabbage, Carrots, Cauliflower,
   Cucumbers, Lettuce, Onions (Green), Peppers (Bell Type), Sweet Potatoes, Tomatoes).
 
@@ -19,8 +23,9 @@ Code: `backend/ml/` (models, backtest, intervals), `backend/ml/service.py` (stud
 Rolling-origin evaluation, the standard for time series:
 
 1. **Hold-out:** the newest 8 weeks (`TEST_WEEKS`). Nothing about them is used to fit, tune, weight or calibrate.
-2. **Origins:** at every week from the first one with a year of history, the model is refit on the weeks up to that
-   origin only (expanding window) and forecasts 8 weeks ahead (`MAX_HORIZON`, the studio's limit). Tests check that no forecast can see a later week
+2. **Origins:** at each of the newest 52 weeks before the hold-out ends (needing a year of history before the first),
+   the model is refit on the weeks up to that origin only (expanding window; the global LightGBM is refit every 8
+   weeks, each fit seeing only weeks on or before its date) and forecasts 8 weeks ahead (`MAX_HORIZON`, the studio's limit). Tests check that no forecast can see a later week
    (`tests/test_ml_models.py`).
 3. **Metrics** on the hold-out forecasts (h ≤ 8):
    - **MAE**: average miss in dollars per unit.
@@ -28,7 +33,10 @@ Rolling-origin evaluation, the standard for time series:
    - **MASE**: MAE ÷ the in-sample MAE of "same as last week". Below 1 beats the naive rule's training-period error.
    - **Skill**: 1 − MAE_model / MAE_seasonal-naive on the same weeks. Positive means better than "same week last year".
    - **Coverage**: the share of real prices inside the stated range (80% by default).
-4. **Champion:** the lowest hold-out MASE for that vegetable.
+4. **Champion:** the lowest **validation** MASE for that vegetable (forecasts on the weeks before the hold-out).
+   Choosing the best of six on the hold-out itself would make the champion's reported hold-out score look better
+   than it is; choosing on validation keeps the hold-out an honest estimate. The dashboard's daily forecasts use the
+   champion, or the forecast applied in the studio.
 
 ## The models
 
@@ -51,56 +59,60 @@ the 80% range at horizon h is the forecast × exp(±q), where q is the 80th perc
 log errors at the same h. In logs, the range scales with the price.
 
 **Trained in the backend.** The pipeline does all fitting and testing (after every refresh: the Data refresh button
-or the weekly Vercel cron; locally also at startup when no current results exist): about 70 s for a refresh that
+only when someone clicks it; locally also at startup when no current results exist): about 70 s for a refresh that
 fetched 15 months of USDA weeks and scored 11 vegetables × 6 models on a laptop, well inside Vercel's 300 s limit.
 It stores each model's scores, calibration and 8-week forecast. The studio only reads them, so a sample costs
 milliseconds; there is no per-click training and no history-window option (models always use every stored week).
 
 **Pace slider.** A what-if, not a model: the path and its range drift linearly to (1 + pace/100) × by the last week.
 
-## Measured results (pipeline run of 29 Oct 2026, 8-week horizon; data 2023-07-28 to 2025-07-25)
+## Measured results (pipeline run of 30 Oct 2026, 8-week horizon; data 2023-07-28 to 2026-10-23)
 
-Hold-out = each vegetable's newest 8 weeks. Lower MASE is better; skill is against "same week last year".
+Hold-out = each vegetable's newest 8 weeks (2026-09-04 to 2026-10-23); trained on 2023-07-28 to 2026-08-28.
+Lower MASE is better; skill is against "same week last year"; bold = lowest hold-out MASE for that vegetable.
+A full train-and-test of 6 models on 11 vegetables takes about 15 s on a laptop (it was 47 s before the
+backtest window and LightGBM refit schedule were tightened, see "How every model is scored").
 
-| Model | Mean MASE | Median MASE | Mean MAPE | Mean skill | Mean 80% coverage | Vegetables won |
+| Model | Mean MASE | Median MASE | Mean MAPE | Mean skill | Mean 80% coverage | Champion for |
 | --- | --- | --- | --- | --- | --- | --- |
-| LightGBM | **1.242** | 1.207 | **17.6%** | **+4.4%** | 0.68 | 1 |
-| Naive (last week) | 1.251 | 1.074 | 18.0% | −2.9% | 0.82 | 5 |
-| Ensemble | 1.295 | 1.234 | 18.1% | +0.5% | 0.67 | 0 |
-| Theta | 1.358 | 1.290 | 18.8% | −6.6% | 0.65 | 0 |
-| ETS | 1.405 | 1.319 | 19.4% | −9.5% | 0.61 | 3 |
-| Seasonal naive | 1.409 | 1.078 | 20.9% | 0 | 0.69 | 2 |
+| ETS | 0.770 | 0.703 | 13.9% | +25.4% | 0.87 | 0 |
+| Theta | 0.771 | 0.691 | 14.0% | +26.0% | 0.87 | 3 |
+| LightGBM | 0.780 | 0.689 | 13.7% | +26.3% | 0.89 | 1 |
+| Ensemble | 0.821 | 0.783 | 14.6% | +23.2% | 0.86 | 7 |
+| Naive (last week) | 1.031 | 0.964 | 18.3% | -2.5% | 0.89 | 0 |
+| Seasonal naive | 1.060 | 0.932 | 18.5% | +0.0% | 0.84 | 0 |
 
-| Vegetable | Ensemble | LightGBM | ETS | Theta | Seasonal naive | Naive | Champion |
+| Vegetable | Ensemble | LightGBM | ETS | Theta | Seasonal naive | Naive (last week) | Champion (validation) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Asparagus | 1.234 | 1.334 | 1.785 | 1.788 | **0.885** | 1.797 | seasonal naive |
-| Broccoli | 1.036 | **0.855** | 1.144 | 1.126 | 0.915 | 1.109 | LightGBM |
-| Cabbage | 1.220 | 1.222 | **1.212** | 1.289 | 2.297 | 1.762 | ETS |
-| Carrots | 1.398 | 0.973 | 1.693 | 1.471 | 1.337 | **0.548** | naive |
-| Cauliflower | 1.288 | 1.274 | 1.324 | 1.307 | **0.795** | 1.707 | seasonal naive |
-| Cucumbers | 2.251 | 2.266 | 2.247 | 2.249 | 2.553 | **2.222** | naive |
-| Lettuce | 1.268 | 1.207 | 1.319 | 1.290 | 1.276 | **1.074** | naive |
-| Onions (Green) | 0.871 | 0.876 | 0.884 | 0.852 | 0.892 | **0.779** | naive |
-| Peppers (Bell Type) | 0.884 | 0.936 | **0.853** | 0.891 | 1.078 | 0.871 | ETS |
-| Sweet Potatoes | 2.099 | 2.010 | 2.309 | 1.984 | 2.488 | **0.908** | naive |
-| Tomatoes | 0.696 | 0.712 | **0.688** | 0.688 | 0.988 | 0.983 | ETS |
+| Asparagus | 0.977 | 1.055 | **0.657** | 0.664 | 1.301 | 1.092 | Ensemble |
+| Broccoli | 0.694 | **0.689** | 0.703 | 0.691 | 0.782 | 0.912 | Theta |
+| Cabbage | 1.153 | **0.973** | 1.015 | 1.021 | 1.618 | 1.225 | Ensemble |
+| Carrots | 0.688 | 0.673 | **0.593** | 0.630 | 0.932 | 0.964 | Ensemble |
+| Cauliflower | 0.370 | 0.386 | 0.445 | **0.359** | 0.395 | 0.772 | Theta |
+| Cucumbers | 0.790 | **0.698** | 0.848 | 0.861 | 1.099 | 1.208 | Ensemble |
+| Lettuce | 1.241 | 1.184 | 1.073 | **1.064** | 1.450 | 1.287 | Ensemble |
+| Onions, Green | 1.565 | 1.556 | 1.450 | **1.443** | 1.722 | 2.048 | LightGBM |
+| Peppers (Bell Type) | 0.317 | 0.396 | **0.264** | 0.326 | 0.610 | 0.498 | Theta |
+| Sweet Potatoes | **0.452** | 0.452 | 0.561 | 0.565 | 0.898 | 0.667 | Ensemble |
+| Tomatoes | 0.783 | **0.519** | 0.855 | 0.857 | 0.853 | 0.668 | Ensemble |
 
 ### What the numbers say
 
-- **Weekly retail prices are close to a random walk.** Every model's mean MASE is above 1, and "same as last week"
-  wins 5 of 11 vegetables. Promotions move a price 20–30% for a single week and then reverse; no model here sees
-  promotions coming.
-- **LightGBM is the best single model on average**, slightly ahead of naive on mean MASE and MAPE, and the only model
-  with clearly positive average skill. (Training it on 1–8 weeks ahead instead of 1–26 made it slightly more accurate.) Pooling all vegetables is what makes it competitive.
+- **Every real model beats both baselines on clean prices**: mean MASE 0.77–0.82 against 1.03 for "same as last
+  week", and about +25% skill over "same week last year". Before organic rows were taken out, naive won 5 of 11
+  vegetables: much of the apparent randomness was the organic mix, not the market.
+- **ETS, Theta and LightGBM are within 1% of each other on average**; which one wins depends on the vegetable.
+  The ensemble is chosen most often on validation because it is the most stable, and costs about 0.05 MASE on the
+  hold-out against the best single model.
 - **The 8-week hold-out is small** (about 36 scored forecasts per vegetable), so one vegetable's ranking can flip with
   a few more weeks of data. Read the per-vegetable champions as indicative.
-- **Ranges are too narrow on recent weeks**: 61–69% of real prices fell inside the "80%" ranges (naive: 82%). The most
-  recent weeks were more volatile than the calibration period. Treat the range as a lower bound on uncertainty.
+- **Ranges are honest overall**: 84–89% of real prices fell inside the "80%" ranges (mean 0.87, slightly cautious).
+  Green onions and cabbage were under-covered in these 8 weeks, which were more volatile than their past.
 
 ### Recommendation
 
-- For ordering, use the vegetable's **champion** from the leaderboard (the studio shows it), and prefer
-  **LightGBM** when no model clearly leads. The studio's default is the ensemble (SPEC §5); switching the default to the
+- For ordering, use the vegetable's **champion** from the leaderboard (the studio shows it, and the dashboard
+  already uses it unless a forecast was applied in the studio). The studio's default is the ensemble (SPEC §5); switching the default to the
   per-vegetable champion is a one-line change in `ml/service.py` (`DEFAULT_MODEL`) once the team agrees.
 - Re-run the pipeline after each USDA refresh: the expanding window and the moving hold-out make the scores more
   reliable as weeks accumulate.
@@ -122,5 +134,5 @@ registered in `ml/models/__init__.py`; the backtest, leaderboard and studio pick
 | Not for | Wholesale or futures pricing, regions other than the modelled one, single-day decisions |
 | Training data | USDA report 3324, Midwest, 11 vegetables, weekly; expanding window from 2023-07-28 |
 | Evaluation | Rolling origin, newest 8 weeks held out, MASE/MAE/MAPE/skill/coverage (above) |
-| Known weaknesses | Promotions are unforecastable spikes; intervals under-cover recent weeks; short history |
-| Refresh | `POST /pipeline/refresh` appends new USDA weeks and rescores every model |
+| Known weaknesses | Promotions are unforecastable spikes; short history; organic prices are not modelled |
+| Refresh | Only when someone clicks Data refresh: `POST /pipeline/refresh` appends the USDA weeks since the newest stored one and retrains and rescores every model (about 15 s of training) |

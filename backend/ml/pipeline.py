@@ -219,7 +219,7 @@ RUNNING_ROW_MAX_AGE = timedelta(minutes=15)
 def run_now() -> Dict:
     """Run a refresh inside the current request and return the final status.
 
-    For serverless hosts (Vercel): a function instance is frozen once its response is sent, so start()'s background
+    For serverless hosts (Vercel), behind the Data refresh button: a function instance is frozen once its response is sent, so start()'s background
     thread would stall. The request itself stays open for the whole Extract -> Load -> Train -> Test (about 70 s on
     a laptop for 11 vegetables; vercel.json allows 300 s). Raises Busy if this process is already refreshing; the
     store's advisory lock still stops two instances refreshing at once (the second ends as 'failed' with a reason).

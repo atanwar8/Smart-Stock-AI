@@ -98,6 +98,9 @@ def weekly_prices(train_data: pd.DataFrame, commodity: str) -> pd.Series:
     (e.g. tomatoes per lb and per pint), so raw rows are not a time series.
     """
     rows = train_data[train_data['commodity'] == commodity]
+    if 'organic' in rows.columns:
+        # Conventional rows only, like the training pipeline (ml.series): organic rows come and go and jolt the average
+        rows = rows[rows['organic'] != 'Yes']
     if 'unit' in rows.columns and rows['unit'].notna().any():
         rows = rows[rows['unit'] == rows['unit'].mode().iloc[0]]
     series = rows.groupby(pd.to_datetime(rows['report_date']))['current_wtd_avg_price'].mean()
@@ -279,6 +282,11 @@ def adopt_pipeline_forecast(forecaster, commodity: str, applied: Optional[List[D
             path = yhat + [v * pace for v in model_path[len(yhat):]]
             break
 
+    # The 80% range per week ahead, from the same conformal table the studio uses (stored with the run)
+    from ml import intervals
+    table = (runs[chosen].get('params') or {}).get('calib_full')
+    weekly_widths = intervals.half_width(table, 0.8, len(path)).tolist() if table else None
+
     metrics = runs[chosen]['metrics']
     # "Repeating last week's price" is the pipeline's naive model; its hold-out error is the skill baseline
     naive_mae = ((all_runs.get('naive') or {}).get('metrics') or {}).get('mae')
@@ -297,6 +305,7 @@ def adopt_pipeline_forecast(forecaster, commodity: str, applied: Optional[List[D
         'model_name': getattr(service.MODELS.get(chosen), 'name', chosen),
         'applied': applied_row is not None,
         'weekly_path': path,
+        'weekly_widths': weekly_widths,
         'performance': performance,
         'weekly_change_std': float(np.std(changes)) if len(changes) > 1 else 0.05,
         'trained_at': (applied_row or {}).get('applied_at') or runs[chosen].get('created_at'),
@@ -360,7 +369,13 @@ def _daily_forecast(forecaster, commodity: str, days_ahead: int, model_info: Dic
     # Weekly forecasts → one price per day, interpolated from the latest report
     days = np.arange(1, days_ahead + 1)
     predictions = np.interp(days, np.arange(0, 7 * weeks + 1, 7), [last_price] + weekly)
-    spread = BAND_Z * model_info['weekly_change_std'] * np.sqrt(days / 7)
+    widths = model_info.get('weekly_widths')
+    if widths:
+        # Calibrated 80% log half-widths per week ahead (conformal, from the pipeline's backtest), zero today
+        steps = [widths[min(i, len(widths) - 1)] for i in range(weeks)]
+        spread = np.interp(days, np.arange(0, 7 * weeks + 1, 7), [0.0] + steps)
+    else:
+        spread = BAND_Z * model_info['weekly_change_std'] * np.sqrt(days / 7)
     last_date = series.index[-1]
 
     return {
