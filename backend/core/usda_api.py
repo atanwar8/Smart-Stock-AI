@@ -122,6 +122,36 @@ def _dedupe(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def fetch_window(commodities: Iterable[str], start: date, end: date, hints: Dict[str, Dict[str, str]] = None,
+                 api_key: str = None, get: Getter = requests.get, progress=None) -> Dict:
+    """Every report row for these commodities with report weeks starting between start and end, as a frame.
+
+    The training store's refresh (ml.pipeline) uses this: it picks the window itself (from the newest stored
+    week) and upserts the rows, so nothing is written here. hints = {commodity: {"unit", "community"}} from the
+    store, needed for names with a comma. progress(commodity, index, total) is called before each commodity.
+    Returns {"frame", "empty_commodities"}.
+    """
+    api_key = api_key or os.getenv('MARS_API_KEY')
+    if not api_key:
+        raise MissingApiKey("Set MARS_API_KEY to a free MyMarketNews API key (mymarketnews.ams.usda.gov, My Profile).")
+    commodities = list(commodities)
+    hints = hints or {}
+    rows, empty = [], []
+    for index, commodity in enumerate(commodities):
+        if progress:
+            progress(commodity, index, len(commodities))
+        found = []
+        chunk_start = start
+        while chunk_start <= end:
+            chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end)
+            found += fetch_commodity(api_key, commodity, chunk_start, chunk_end, get, **hints.get(commodity, {}))
+            chunk_start = chunk_end + timedelta(days=1)
+        rows += found
+        if not found:
+            empty.append(commodity)
+    return {'frame': to_frame(rows), 'empty_commodities': empty}
+
+
 def refresh_training_data(train_path, commodities: Iterable[str], api_key: str = None,
                           today: date = None, get: Getter = requests.get) -> Dict:
     """Fetch every report week since the newest one in the training CSV and append it.

@@ -1,32 +1,53 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { getJSON } from '@/lib/api';
 import type { Commodities } from '@/lib/types';
 
 // The ten USDA vegetables the models are trained on, used until /commodities answers
 const FALLBACK_COMMODITIES = ['Tomatoes', 'Lettuce', 'Carrots', 'Broccoli', 'Cucumbers', 'Cauliflower', 'Cabbage', 'Asparagus', 'Sweet Potatoes', 'Onions, Green'];
 
-interface CommodityContextType {
+interface CommodityState {
   commodities: string[];
   /** Price unit suffix for a commodity, e.g. "/lb", " each", "/2 lb bag" */
   priceUnit: (commodity: string) => string;
   selectedCommodity: string;
-  setSelectedCommodity: (commodity: string) => void;
   selectedState: string;
-  setSelectedState: (state: string) => void;
   selectedZipCode: string;
+}
+
+interface CommodityActions {
+  setSelectedCommodity: (commodity: string) => void;
+  setSelectedState: (state: string) => void;
   setSelectedZipCode: (zipCode: string) => void;
 }
 
-const CommodityContext = createContext<CommodityContextType | undefined>(undefined);
+type CommodityContextType = CommodityState & CommodityActions;
 
-export const useCommodity = () => {
-  const context = useContext(CommodityContext);
-  if (context === undefined) {
-    throw new Error('useCommodity must be used within a CommodityProvider');
-  }
+// Two contexts so controls that only change the selection (switcher, keyboard shortcuts) don't
+// re-render every time the selection changes; the setters never change identity.
+const StateContext = createContext<CommodityState | undefined>(undefined);
+const ActionsContext = createContext<CommodityActions | undefined>(undefined);
+
+const ZIP_KEY = 'smartstock.zip';
+
+export function useCommodityState(): CommodityState {
+  const context = useContext(StateContext);
+  if (context === undefined) throw new Error('useCommodityState must be used within a CommodityProvider');
   return context;
+}
+
+export function useCommodityActions(): CommodityActions {
+  const context = useContext(ActionsContext);
+  if (context === undefined) throw new Error('useCommodityActions must be used within a CommodityProvider');
+  return context;
+}
+
+/** Everything at once: { commodities, selectedCommodity, setSelectedCommodity, priceUnit, ... } */
+export const useCommodity = (): CommodityContextType => {
+  const state = useCommodityState();
+  const actions = useCommodityActions();
+  return useMemo(() => ({ ...state, ...actions }), [state, actions]);
 };
 
 interface CommodityProviderProps {
@@ -38,7 +59,7 @@ export const CommodityProvider: React.FC<CommodityProviderProps> = ({ children }
   const [units, setUnits] = useState<Record<string, string>>({});
   const [selectedCommodity, setSelectedCommodity] = useState('Tomatoes');
   const [selectedState, setSelectedState] = useState('CA');
-  const [selectedZipCode, setSelectedZipCode] = useState('90210');
+  const [selectedZipCode, setZip] = useState('90210');
 
   useEffect(() => {
     getJSON<Commodities>('/commodities')
@@ -49,26 +70,39 @@ export const CommodityProvider: React.FC<CommodityProviderProps> = ({ children }
       .catch(() => {});
   }, []);
 
-  const priceUnit = (commodity: string) => {
-    const unit = units[commodity];
-    if (!unit) return '';
-    return unit === 'each' ? ' each' : `/${unit.replace(/^per /, '')}`;
-  };
+  // The kitchen's ZIP is personal, so it survives a reload
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ZIP_KEY);
+      if (saved && /^\d{5}$/.test(saved)) setZip(saved);
+    } catch {}
+  }, []);
+
+  const setSelectedZipCode = useCallback((zip: string) => {
+    setZip(zip);
+    try {
+      localStorage.setItem(ZIP_KEY, zip);
+    } catch {}
+  }, []);
+
+  const priceUnit = useCallback(
+    (commodity: string) => {
+      const unit = units[commodity];
+      if (!unit) return '';
+      return unit === 'each' ? ' each' : `/${unit.replace(/^per /, '')}`;
+    },
+    [units]
+  );
+
+  const state = useMemo(
+    () => ({ commodities, priceUnit, selectedCommodity, selectedState, selectedZipCode }),
+    [commodities, priceUnit, selectedCommodity, selectedState, selectedZipCode]
+  );
+  const actions = useMemo(() => ({ setSelectedCommodity, setSelectedState, setSelectedZipCode }), [setSelectedZipCode]);
 
   return (
-    <CommodityContext.Provider
-      value={{
-        commodities,
-        priceUnit,
-        selectedCommodity,
-        setSelectedCommodity,
-        selectedState,
-        setSelectedState,
-        selectedZipCode,
-        setSelectedZipCode,
-      }}
-    >
-      {children}
-    </CommodityContext.Provider>
+    <ActionsContext.Provider value={actions}>
+      <StateContext.Provider value={state}>{children}</StateContext.Provider>
+    </ActionsContext.Provider>
   );
 };

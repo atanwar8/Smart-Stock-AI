@@ -1,0 +1,133 @@
+/* Studio-only motion. Tokens come from globals.css (@theme); names per docs/handoff/SPEC.md §3. */
+
+.spinSlow {
+  animation: studio-spin 22s linear infinite;
+}
+.spinComet {
+  animation: studio-spin 2.6s cubic-bezier(0.45, 0.05, 0.35, 0.95) infinite;
+}
+.orbit {
+  animation: studio-spin 16s linear infinite;
+}
+.counterOrbit {
+  animation: studio-spin 16s linear infinite reverse;
+}
+.breathe {
+  animation: studio-breathe 2.4s ease-in-out infinite;
+}
+.caption {
+  animation: studio-rise 0.42s var(--ease-spring) both;
+}
+
+/* Sample state: the dashed forecast line marches gently, the cone has a slow sheen passing through */
+.march {
+  stroke-dasharray: 5 6;
+  animation: studio-march 1.4s linear infinite;
+}
+.sheen {
+  transform-box: fill-box;
+  animation: studio-sheen 2.8s ease-in-out infinite;
+}
+
+/* New forecast: revealed from "today" forward */
+.reveal {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: studio-reveal 0.7s var(--ease-spring) both;
+}
+
+/* Applied: the line draws itself solid once */
+.draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: studio-draw 0.9s var(--ease-spring) forwards;
+}
+
+.ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: studio-ping 0.9s var(--ease-spring) both;
+}
+
+.skeleton {
+  background: linear-gradient(100deg, var(--color-well) 30%, rgb(255 255 255 / 0.55) 50%, var(--color-well) 70%);
+  background-size: 260% 100%;
+  animation: studio-shimmer 1.6s linear infinite;
+}
+
+.toast {
+  animation: studio-toast 0.42s var(--ease-spring) both;
+}
+
+.pop {
+  animation: studio-pop 0.42s var(--ease-spring) both;
+}
+
+@keyframes studio-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes studio-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes studio-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes studio-march {
+  to { stroke-dashoffset: -22; }
+}
+@keyframes studio-sheen {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(220%); }
+}
+@keyframes studio-reveal {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes studio-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes studio-ping {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes studio-shimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -130% 0; }
+}
+@keyframes studio-toast {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes studio-pop {
+  0% { transform: scale(0.94); }
+  60% { transform: scale(1.03); }
+  100% { transform: none; }
+}
+
+/* Reduced motion: nothing spins or travels; the loader keeps one gentle pulse so it still reads as busy.
+   !important + a class selector beats the global `* { animation-duration: 0.01ms !important }` rule. */
+@media (prefers-reduced-motion: reduce) {
+  .spinSlow,
+  .spinComet,
+  .orbit,
+  .counterOrbit,
+  .march,
+  .sheen,
+  .reveal,
+  .ping,
+  .skeleton,
+  .pop,
+  .caption,
+  .toast {
+    animation: none !important;
+  }
+  .draw {
+    animation: none !important;
+    stroke-dashoffset: 0;
+  }
+  .breathe {
+    animation: studio-breathe 2.4s ease-in-out infinite !important;
+  }
+}

@@ -22,3 +22,6 @@ out/
 .vercel
 .env*
 !.env.template
+
+# Local training store
+backend/var/

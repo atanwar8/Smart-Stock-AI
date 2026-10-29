@@ -4,32 +4,91 @@ SmartStock AI - Forecaster Utilities
 Additional methods for the forecaster class
 """
 
-import pandas as pd
-import numpy as np
+import copy
+import os
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Any, Callable, Dict, Hashable, List
+
+import numpy as np
+import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# Handle ML library imports with better error handling
+# LightGBM needs OpenMP (libgomp in Docker, `brew install libomp` on macOS); without it we use a random forest
 try:
     import lightgbm as lgb
     LIGHTGBM_AVAILABLE = True
-except Exception as e:
+except Exception:
     LIGHTGBM_AVAILABLE = False
-    lgb = None  # Set to None for safe checking
-
-try:
-    import xgboost as xgb
-    XGBOOST_AVAILABLE = True
-except Exception as e:
-    XGBOOST_AVAILABLE = False
-    xgb = None  # Set to None for safe checking
+    lgb = None
 
 
 LAGS = (1, 2, 3, 4, 8, 13, 52)  # in weeks; USDA retail reports are weekly
 WEEK = pd.Timedelta(days=7)
 BAND_Z = 1.28  # ~80% band around the forecast
+
+# Derived data only changes when the training frame or a model changes; the TTL is a safety net on top of that
+CACHE_TTL_SECONDS = float(os.getenv('CACHE_TTL_SECONDS', 15 * 60))
+
+
+class TTLCache:
+    """Small thread-safe memo for derived data (weekly series, forecasts, chart payloads).
+
+    Every entry belongs to one data version: asking with a different version empties the cache, so a USDA refresh
+    or a reload of the training frame can never serve numbers computed from the old data. Entries also expire after
+    `ttl` seconds, and the least recently used are dropped beyond `maxsize`.
+    """
+
+    def __init__(self, ttl: float = CACHE_TTL_SECONDS, maxsize: int = 512, clock: Callable[[], float] = time.monotonic):
+        self.ttl, self.maxsize, self._clock = ttl, maxsize, clock
+        self._lock = threading.Lock()
+        self._entries: "OrderedDict[Hashable, tuple]" = OrderedDict()  # key -> (stored_at, value)
+        self._version: Hashable = None
+        self.hits = self.misses = 0
+
+    def get_or_set(self, version: Hashable, key: Hashable, compute: Callable[[], Any]) -> Any:
+        with self._lock:
+            if version != self._version:
+                self._entries.clear()
+                self._version = version
+            entry = self._entries.get(key)
+            if entry is not None and self._clock() - entry[0] < self.ttl:
+                self._entries.move_to_end(key)
+                self.hits += 1
+                return entry[1]
+            self.misses += 1
+        # Computed outside the lock so one slow forecast doesn't hold up requests for other items
+        value = compute()
+        with self._lock:
+            if version == self._version:  # the data may have been replaced while we computed
+                self._entries[key] = (self._clock(), value)
+                self._entries.move_to_end(key)
+                while len(self._entries) > self.maxsize:
+                    self._entries.popitem(last=False)
+        return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
+def cached(forecaster, key: Hashable, compute: Callable[[], Any]) -> Any:
+    """Memoize `compute` for the forecaster's current data version (plain call for objects without a cache)."""
+    cache = getattr(forecaster, 'cache', None)
+    if cache is None:
+        return compute()
+    return cache.get_or_set(getattr(forecaster, 'data_version', None), key, compute)
+
+
+def model_token(model_info: Dict) -> tuple:
+    """Identifies one trained model, so a retrain invalidates forecasts made by the previous one."""
+    return (model_info.get('type'), model_info.get('trained_at'), id(model_info.get('model')))
 
 
 def weekly_prices(train_data: pd.DataFrame, commodity: str) -> pd.Series:
@@ -43,6 +102,14 @@ def weekly_prices(train_data: pd.DataFrame, commodity: str) -> pd.Series:
         rows = rows[rows['unit'] == rows['unit'].mode().iloc[0]]
     series = rows.groupby(pd.to_datetime(rows['report_date']))['current_wtd_avg_price'].mean()
     return series.dropna().sort_index().rename('price')
+
+
+def weekly_series(forecaster, commodity: str) -> pd.Series:
+    """weekly_prices for the forecaster's current data, built once per data version.
+
+    Returns a copy, so callers can't change the cached series by accident.
+    """
+    return cached(forecaster, ('weekly', commodity), lambda: weekly_prices(forecaster.train_data, commodity)).copy()
 
 
 def build_features(series: pd.Series) -> pd.DataFrame:
@@ -64,8 +131,6 @@ def build_features(series: pd.Series) -> pd.DataFrame:
 def _new_model(model_type: str):
     if model_type == 'LightGBM' and LIGHTGBM_AVAILABLE:
         return lgb.LGBMRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42, verbose=-1)
-    if model_type == 'XGBoost' and XGBOOST_AVAILABLE:
-        return xgb.XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42, verbosity=0)
     from sklearn.ensemble import RandomForestRegressor
     return RandomForestRegressor(n_estimators=100, max_depth=6, random_state=42)
 
@@ -79,7 +144,7 @@ def train_model(forecaster, commodity: str, weather_data: Dict = None) -> Dict:
     if forecaster.train_data is None:
         raise ValueError("Training data not loaded")
 
-    series = weekly_prices(forecaster.train_data, commodity)
+    series = weekly_series(forecaster, commodity)
     features = build_features(series)
     data = features.assign(price=series).dropna()
     if len(data) < 60 or forecaster.model_type == 'Simple':
@@ -172,17 +237,31 @@ def _forecast_weeks(model, series: pd.Series, weeks: int) -> List[float]:
 
 
 def predict_with_model(forecaster, commodity: str, days_ahead: int, weather_data: Dict) -> Dict:
-    """Daily price forecast for the next `days_ahead` days after the latest USDA report."""
+    """Daily price forecast for the next `days_ahead` days after the latest USDA report.
+
+    The forecast is memoized per commodity, horizon, model and data version, so the dashboard, inventory and
+    alerts share one computation; only the weather note, which depends on the caller's ZIP, is made per call.
+    """
     if commodity not in forecaster.models:
         return {'error': f'No model trained for {commodity}'}
     if forecaster.train_data is None:
         return {'error': 'Training data not available'}
 
-    series = weekly_prices(forecaster.train_data, commodity)
+    model_info = forecaster.models[commodity]
+    days_ahead = int(days_ahead)
+    result = cached(forecaster, ('forecast', commodity, days_ahead, model_token(model_info)),
+                    lambda: _daily_forecast(forecaster, commodity, days_ahead, model_info))
+    result = copy.deepcopy(result)  # callers may edit their copy; the cached one stays intact
+    if 'error' not in result:
+        result['weather_impact'] = calculate_weather_impact(commodity, weather_data)
+    return result
+
+
+def _daily_forecast(forecaster, commodity: str, days_ahead: int, model_info: Dict) -> Dict:
+    series = weekly_series(forecaster, commodity)
     if series.empty:
         return {'error': f'No data available for {commodity}'}
 
-    model_info = forecaster.models[commodity]
     weeks = int(np.ceil(days_ahead / 7))
     last_price = float(series.iloc[-1])
     if model_info['type'] == 'Simple Model':
@@ -205,7 +284,7 @@ def predict_with_model(forecaster, commodity: str, days_ahead: int, weather_data
         'dates': [(last_date + timedelta(days=int(d))).strftime('%Y-%m-%d') for d in days],
         'volatility': float(np.std(predictions) / np.mean(predictions)),
         'average_price': float(np.mean(predictions)),
-        'weather_impact': calculate_weather_impact(commodity, weather_data),
+        'weather_impact': None,  # filled in per call by predict_with_model
         'performance': model_info['performance'],
         'feature_importance': get_feature_importance(forecaster, commodity)
     }

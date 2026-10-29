@@ -7,3 +7,5 @@ services:
     env_file:
       - path: backend/.env
         required: false
+    environment:
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1} # uvicorn workers; 1 until inventory/alerts move to the shared store

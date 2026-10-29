@@ -31,7 +31,8 @@ if [ "$mode" = "prod" ]; then
   echo "→ Building the dashboard"
   (cd smartstock-nextjs && npm run build)
   echo "→ SmartStock AI on http://localhost:8000"
-  cd backend && exec .venv/bin/uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}"
+  # WEB_CONCURRENCY > 1 runs several worker processes; inventory and alerts are per-process memory, so keep 1 for now
+  cd backend && exec .venv/bin/uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers "${WEB_CONCURRENCY:-1}"
 fi
 
 # Dev: run both servers, stop both on Ctrl+C

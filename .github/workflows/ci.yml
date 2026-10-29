@@ -62,5 +62,26 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: smartstock:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The real image: /health answers, the dashboard is gzipped, hashed assets are CDN-cacheable, mutations aren't
+      - name: Smoke test the image
+        run: |
+          docker run -d --name smartstock -p 8000:8000 -e PRETRAIN_MODELS=0 -e REFRESH_ON_STARTUP=0 smartstock:ci
+          for i in $(seq 1 60); do curl -fsS http://localhost:8000/health >/dev/null && break; sleep 1; done
+          curl -fsS http://localhost:8000/health
+          curl -fsS -o page.html -D page.txt -H 'Accept-Encoding: gzip' --compressed http://localhost:8000/
+          grep -qi '^content-encoding: gzip' page.txt
+          grep -qi '^cache-control: public, max-age=0, must-revalidate' page.txt
+          asset=$(python3 -c "import re; print(re.search(r'/_next/static/[^\"]+?\.js', open('page.html').read()).group(0))")
+          curl -fsS -o /dev/null -D asset.txt "http://localhost:8000$asset"
+          grep -qi '^cache-control: public, max-age=31536000, immutable' asset.txt
+          curl -fsS -o /dev/null -D post.txt -X POST -H 'Content-Type: application/json' \
+            -d '{"ingredient":"Tomatoes","current_stock":20,"daily_usage":5,"max_capacity":100}' \
+            http://localhost:8000/api/inventory/update
+          grep -qi '^cache-control: no-store' post.txt
+      - name: Container logs
+        if: failure()
+        run: docker logs smartstock || true
