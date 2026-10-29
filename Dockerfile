@@ -12,9 +12,16 @@ RUN npm run build
 FROM python:3.11-slim
 # WEB_CONCURRENCY = uvicorn worker processes. Keep 1 while inventory and alerts live in process memory
 # (each worker would hold its own copy); see the README's scaling notes before raising it.
+# OMP/OPENBLAS/MKL_NUM_THREADS = 1: inside a container the libraries see the host's cores, not the CPU share the
+# service gets (0.15 of a CPU on Render's free plan). LightGBM and numpy then start one thread per host core and
+# OpenMP threads spin while they wait, so most of the small CPU share went to threads waiting on each other:
+# 4 threads on one core cost 2.1x the CPU of 1 for identical results. One thread each is the fastest here.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    WEB_CONCURRENCY=1
+    WEB_CONCURRENCY=1 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1
 
 # libgomp1: the OpenMP runtime LightGBM needs
 RUN apt-get update \
