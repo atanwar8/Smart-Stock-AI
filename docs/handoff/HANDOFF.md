@@ -1,6 +1,6 @@
 # Handoff — redesign + Forecast Studio + Supabase pipeline
 
-Status: **in progress** (last updated by the coordinator, 2026-10-28). Branch `feat/forecast-studio-redesign`, nothing committed yet.
+Status: **feature-complete on the branch, not merged** (updated 2026-10-29 by the cloud session that resumed this work). Branch `feat/forecast-studio-redesign` on GitHub. The desktop session's uncommitted work was pushed by the user as commit 7738b9e; everything after it is in the commits that follow.
 The contract for all work is [`SPEC.md`](SPEC.md). Each workstream keeps its own running note next to this file:
 [`frontend-shell.md`](frontend-shell.md), [`frontend-studio.md`](frontend-studio.md), [`backend-perf.md`](backend-perf.md), [`ml-pipeline.md`](ml-pipeline.md).
 If you are the next agent: read SPEC.md, then those four notes, then finish the checklist below in order.
@@ -38,12 +38,34 @@ If you are the next agent: read SPEC.md, then those four notes, then finish the 
   add `SUPABASE_DB_URL` + `MARS_API_KEY` to the Render service's environment for the live deploy.
 - Commit / push / PR: only when the user says so.
 
+## Resumed 2026-10-29 (cloud session)
+What the four agents left unfinished, and what was done about it:
+- **ml-pipeline**: `ml/service.py`, `ml/pipeline.py`, `routers/forecast.py` (was an 8-line stub), `core/usda_api.fetch_window`,
+  `scripts/offline_timesfm.py`, tests (`test_store`, `test_pipeline`, `test_forecast_api`, `test_ml_models`) and
+  `docs/ml/MODEL_GUIDE.md` written. ADR-006 records the store decision.
+- **frontend-shell**: Alerts and Data refresh pages finished, Plotly removed, lint warning fixed (see frontend-shell.md).
+- **frontend-studio**: verified against the real backend (Sample prediction -> Apply in a browser). The answer headline now
+  measures change from the 4-week average, matching the backend summary; model cards no longer overflow at 375 px.
+- **backend-perf**: `tests/conftest.py` now also points tests at a temp SQLite file (they were defaulting to
+  `backend/var/smartstock.db`) and turns off startup seeding/training.
+- Overview: the summary sentence reserves its height (Lighthouse CLS 0.24 -> 0.002); low-contrast dock and Market
+  pulse labels raised to pass WCAG AA.
+
+Verified in the cloud: 75 backend tests pass on Python 3.11; tsc, lint, build and npm audit clean; every section at
+1440 and 375 px with no console errors and no horizontal scroll; Lighthouse desktop 100/100/100/100, mobile 88/100/100/100.
+Not verified in the cloud: TimesFM (Hugging Face and the PyTorch index are blocked there), a real USDA refresh (no
+`MARS_API_KEY` there), the live Supabase store from the app (no `SUPABASE_DB_URL` there), the Docker image build.
+
 ## Coordinator checklist (remaining)
-- [ ] Collect the four agents' reports; resolve "Requests for other workstreams" in their notes.
-- [ ] Integration: `cd backend && .venv/bin/python -m pytest -q`; `cd smartstock-nextjs && npx tsc --noEmit && npm run lint && npm run build`.
-- [ ] Run locally (`./start.sh`), click through every section in the browser at desktop + 375px, test preview → apply.
-- [ ] Lighthouse audit (chrome-devtools MCP `lighthouse_audit`) on the production build (`./start.sh prod`), record scores.
-- [ ] Rewrite `README.md`: what it is, the prediction model section (link `docs/ml/MODEL_GUIDE.md`), pipeline diagram,
+- [x] Collect the four agents' reports; resolve "Requests for other workstreams" in their notes.
+- [x] Integration: `cd backend && .venv/bin/python -m pytest -q`; `cd smartstock-nextjs && npx tsc --noEmit && npm run lint && npm run build`.
+- [x] Run locally (`./start.sh`), click through every section in the browser at desktop + 375px, test preview → apply.
+- [x] Lighthouse audit on the production build, scores recorded in the README.
+- [x] Rewrite `README.md`: what it is, the prediction model section (link `docs/ml/MODEL_GUIDE.md`), pipeline diagram,
       Supabase setup, configuration table (new env vars), perf checklist outcome, run/test/deploy.
 - [x] Seed Supabase once `SUPABASE_DB_URL` exists; verify row counts with the Supabase MCP; run `get_advisors`.
-- [ ] Mark this file "complete" or list what is left.
+- [ ] First real refresh into Supabase (2025-07-25 -> today) with `MARS_API_KEY` + `SUPABASE_DB_URL` set: `POST /api/pipeline/refresh`.
+- [ ] Score TimesFM offline on a machine that can load it: `python -m scripts.offline_timesfm` (see MODEL_GUIDE.md).
+- [ ] Add `SUPABASE_DB_URL` (session pooler) to the Render service before merging to `main` (merging deploys).
+- [ ] Decide on the Supabase advisor WARN about `public.rls_auto_enable()` (see above).
+- [ ] Open the pull request to `main` when the user asks.

@@ -25,11 +25,12 @@ No imports from `ui.tsx` or `Chart.tsx`; only SPEC §3 token utilities, `Produce
   `Toast` (portal). Shortcuts in `PredictionsTab`: Enter apply, Esc discard, G generate.
 - `npx tsc --noEmit` clean for studio files; `eslint` clean on studio files.
 
-## In progress
-- Visual check in the browser (mock) at desktop + 375 px.
+## Verified 2026-10-29 against the real backend
+- Sample prediction -> Apply in Chromium (Playwright): the applied forecast is returned by `/forecast/active`.
+- Fixed: answer headline uses the 4-week average (matches the backend summary); model cards fit at 375 px.
 
-## Not started
-- Test against the real backend (`backend/routers/forecast.py` is still a stub). When it lands:
+## Re-run the real-backend check
+- Previously planned steps:
   `cd backend && SUPABASE_DB_URL= MARS_API_KEY= REFRESH_ON_STARTUP=0 .venv/bin/uvicorn main:app --port 8100`, then
   `BACKEND_URL=http://localhost:8100 npx next dev -p 3200` (no mock flag) and open `/#/predictions`.
 

@@ -30,14 +30,34 @@ Owner: frontend-shell agent. Scope: everything in `smartstock-nextjs/` except th
   produce bubbles, weekly spend bars, Monthly/Annual, running total, savings chip, skip + Undo; night
   recommendation card; stock form; best-day bars; walk-in list.
 
-## In progress
-- Alerts page (Atisbo list), Data refresh page (pipeline stepper + runs), Plotly removal, perf checks.
+- Alerts (`AlertsTab.tsx`): server-paged `/alerts/recent?limit&offset` ("Show N more of total" grows the
+  page), each alert as one sentence measured against the chef's rule ("rise 6.2% next week, 3.1x your 2% rule",
+  "1.7x more lettuce on hand than will stay fresh"); price alerts show the usual band shaded around the real
+  line plus "That's 2.6x more than usual" vs the typical weekly move (`lib/usual.ts`, shared with AnomalyCard);
+  Silence 24h / Not relevant / Undo (`lib/alertPrefs.ts`, per device); J/K to move, Enter opens. The rail badge
+  asks for `limit=100` so it counts every urgent alert.
+- Data refresh (`ScrapeTab.tsx` + `lib/pipeline.ts`): night-card stepper Extract -> Load -> Train -> Test on
+  `/pipeline/status` (polled every 1.5 s while running, 30 s otherwise, paused in hidden tabs), progress bar,
+  POST `/pipeline/refresh` (409 = follow the running job), store card (rows, first/newest week, coverage bar,
+  Supabase/Local pill; falls back to `/health` figures), paginated `/pipeline/runs` history. States: loading
+  skeletons, network error with retry, 404 "Pipeline not available on this server", no USDA key (button
+  disabled + MARS_API_KEY how-to), skipped run, failed run with its error. `lib/api.ts` now throws `ApiError`
+  (same message text as before, plus `.status`).
+- Plotly removed: `Chart.tsx` deleted (nothing imported it), `plotly.js-dist-min`, `react-plotly.js`,
+  `@types/react-plotly.js` uninstalled (lockfile updated); unused `public/*.svg` deleted (folder removed).
+- Lint: unused `urgencyTone` removed from `OrderingTab.tsx`.
 
-## Not started
-- See "In progress".
+## In progress
+- (none)
+
+## Not verified
+- The pipeline page was checked against mocked responses shaped exactly like SPEC section 5 (no backend was
+  running on :8000). Re-check against the real `/pipeline/*` once it is up (`progress` as 0..1 or 0..100 are
+  both handled; `ingest_runs.source` / `message` are optional).
 
 ## Requests for other workstreams
-- (none yet)
+- (none)
 
 ## How to verify
-`cd smartstock-nextjs && npx tsc --noEmit && npm run lint && npm run build`
+`cd smartstock-nextjs && npx tsc --noEmit && npm run lint && npm run build && npm audit --audit-level=high`
+Visual: serve `out/` on port 3100+ and open `#/alerts` and `#/refresh` at 1440 and 375 px.

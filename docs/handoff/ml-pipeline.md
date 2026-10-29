@@ -1,4 +1,4 @@
-# ml-pipeline handoff (in progress)
+# ml-pipeline handoff (done 2026-10-29, finished by the cloud session)
 
 ## Contract deviations
 None so far.
@@ -13,8 +13,18 @@ None so far.
 - Models (`backend/ml/models`): naive, seasonal_naive, ets, theta, lightgbm (global direct), timesfm, ensemble.
   Rolling-origin backtest engine (`backend/ml/backtest.py`) with conformal intervals (`ml/intervals.py`).
 
-## In progress
-- ml/service.py (preview/leaderboard caches), ml/pipeline.py, routers/forecast.py, scripts, tests, docs.
+- `ml/service.py`: catalog, leaderboard, preview (cached per data version x commodity x model x history window;
+  reuses the pipeline's stored backtest/calibration for the full window), apply, active.
+- `ml/pipeline.py`: Extract -> Load -> Train -> Test in a background thread, advisory-locked; skipped/failed runs recorded.
+- `routers/forecast.py`: every SPEC §5 route; startup seeds an empty store and scores it once (background).
+- `core/usda_api.fetch_window`, `scripts/offline_timesfm.py`, tests, `docs/ml/MODEL_GUIDE.md`, ADR-006.
+
+## Not verified
+- TimesFM end to end (blocked in the cloud session: no Hugging Face access). `scripts/offline_timesfm.py` is untested.
+- A real USDA refresh into Supabase (needs the keys).
+
+## How to verify
+`cd backend && .venv/bin/python -m pytest -q tests/test_store.py tests/test_pipeline.py tests/test_forecast_api.py tests/test_ml_models.py`
 
 ## Notes
 - LightGBM's macOS wheel needs Homebrew libomp, which this Mac lacks. The model falls back to sklearn

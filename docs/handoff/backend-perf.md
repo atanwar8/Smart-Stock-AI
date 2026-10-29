@@ -1,6 +1,6 @@
 # backend-perf handoff
 
-Status: **in progress** (2026-10-28). Owner files: `backend/main.py`, `backend/core/forecaster*.py`, `backend/core/open_meteo.py`,
+Status: **done** (2026-10-28; tests confirmed 2026-10-29: 75 pass, including test_perf.py). Owner files: `backend/main.py`, `backend/core/forecaster*.py`, `backend/core/open_meteo.py`,
 `backend/tests/test_{api,forecaster,weather,perf}.py`, `Dockerfile`, `render.yaml`, `start.sh`, `docker-compose.yml`, `.github/**`.
 
 ## Done
@@ -15,5 +15,5 @@ Status: **in progress** (2026-10-28). Owner files: `backend/main.py`, `backend/c
 - CPU-bound endpoints are now `def` (thread pool) so `/health` stays responsive while a model trains.
 - xgboost/joblib code paths removed from `core/`.
 
-## In progress
-- `backend/tests/test_perf.py`, deploy files (`WEB_CONCURRENCY`), requirements line edits, CI smoke step.
+- `backend/tests/test_perf.py`, deploy files (`WEB_CONCURRENCY`), requirements line edits.
+- 2026-10-29: `tests/conftest.py` also isolates the SQLite store and disables startup seeding/training in tests.
