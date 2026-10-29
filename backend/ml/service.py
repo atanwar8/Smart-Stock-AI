@@ -36,8 +36,39 @@ DEFAULT_MODEL = "ensemble"
 # Models the studio offers. "naive" stays a backtest baseline only (it is the MASE denominator's idea already).
 STUDIO_MODELS = [m for m in ORDER if m != "naive"]
 LIVE_MODELS = ["naive", "seasonal_naive", "ets", "theta", "lightgbm", "ensemble"]
-# Set by ml.pipeline while it trains; previews then wait for its results instead of training a second copy
-TRAINING = threading.Event()
+class _Training:
+    """Set while this process trains, or waits to train, the models (ml.pipeline). Previews without a stored run
+    then answer 503 and the studio retries, instead of training a second copy on the same small CPU.
+
+    A count rather than a flag, because startup housekeeping and a refresh can overlap: the first to finish must
+    not clear it for the other. set()/clear() force it on and off (tests).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._active = 0
+        self._forced = False
+
+    def __enter__(self):
+        with self._lock:
+            self._active += 1
+        return self
+
+    def __exit__(self, *exc):
+        with self._lock:
+            self._active -= 1
+
+    def is_set(self) -> bool:
+        return self._forced or self._active > 0
+
+    def set(self) -> None:
+        self._forced = True
+
+    def clear(self) -> None:
+        self._forced = False
+
+
+TRAINING = _Training()
 TRAINING_MESSAGE = ("The models are being trained on the newest data. Samples will be ready in a few minutes "
                     "(Data refresh shows the progress).")
 
