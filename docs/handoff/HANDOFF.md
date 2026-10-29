@@ -92,9 +92,16 @@ The user asked to leave Render (slow wake-ups) for Vercel and to make prediction
 - Live Supabase already holds the first real refresh (run 3: 20,493 rows, Jul 2025 -> Oct 23 2026, 132 training runs).
   The password in the desktop's `backend/.env` is stale (it was reset for Render); local runs use a local store.
 
+### Status 2026-10-30
+- Committed and pushed `feat/vercel-read-only-forecasts` (ff76216, 97b61a8). PR text: [`PR-vercel.md`](PR-vercel.md);
+  open it at https://github.com/atanwar8/Smart-Stock-AI/pull/new/feat/vercel-read-only-forecasts (no `gh` here).
+- Preview deployment `dpl_9AcHL6RBv2m1r7K9UxfCgELJm8nL` (https://smartstock-rk5893ump-aryan-tanwar.vercel.app,
+  behind Vercel login): READY, Python 3.12 function in pdx1, 340 MB bundle, `/api/health` 200, dashboard served.
+  It runs in CSV fallback mode because the project has **no** `SUPABASE_DB_URL` / `MARS_API_KEY` / `CRON_SECRET`
+  yet (only `PORT`). The connector reaches the team without `teamId` (passing the team id returns 403).
+
 ### Remaining (in order)
-1. User approves Vercel team access for the connector (team `aryan-tanwar`, `team_XM4Q3lOxug35nEahNtI7X3lo`),
-   project `smartstock-ai` (`prj_pvZWmhwX15UAKN6szkeLhQrVvht7`).
+1. Done: Vercel team access approved (team `aryan-tanwar`), project `smartstock-ai` (`prj_pvZWmhwX15UAKN6szkeLhQrVvht7`).
 2. User adds Vercel env vars (Production + Preview): `SUPABASE_DB_URL` (same value as Render's), `MARS_API_KEY`,
    `CRON_SECRET` (any long random string). Never paste them in chat.
 3. Commit this branch, push, open a PR; check the preview deployment (Overview, Studio sample -> Apply, Data
