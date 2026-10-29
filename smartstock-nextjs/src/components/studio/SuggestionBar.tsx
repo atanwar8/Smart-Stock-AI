@@ -1,7 +1,7 @@
 'use client';
 
 // The floating suggestion under the chart, like accepting a suggestion in Wispr Flow:
-// "Sample from TimesFM · 8 weeks · 80% range"  [Discard  Esc]  [Apply prediction  ↵]
+// "Sample from Ensemble · 8 weeks · 80% range"  [Discard  Esc]  [Apply prediction  ↵]
 
 import { memo } from 'react';
 import { AlertCircle, Check, Loader2, Sparkles } from 'lucide-react';
@@ -102,7 +102,6 @@ function SuggestionBar({ preview, loading, stale, applied, discarded, apply, pen
               <>
                 <b className="font-semibold">Sample from {preview.model_name}</b>
                 <span className="text-muted"> · {describeSample(preview)}</span>
-                {preview.mode === 'stored' && <span className="text-muted"> · stored, computed offline</span>}
               </>
             )}
           </span>

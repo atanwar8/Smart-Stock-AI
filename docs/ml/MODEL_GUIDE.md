@@ -40,14 +40,13 @@ Rolling-origin evaluation, the standard for time series:
 | `theta` | Theta method (M3 winner) | Smoothed level plus half the long-run drift | x̂(T+h) = SES(T) + ½·b₀·(h − 1 + 1/α − (1−α)ᵀ/α) |
 | `lightgbm` | Global, direct gradient-boosted trees | One model learns from all 11 vegetables at once; the horizon is a feature, so errors don't compound | target z = x(t+h) − mean(x(t−3..t)); features: lags, rolling means, volatility, momentum, week-of-year, last year's level, commodity, h; L1 loss |
 | `ensemble` | Inverse-MASE weighted blend | Averages the three best candidates on pre-hold-out weeks | ŷ = Σ wᵢ·ŷᵢ, wᵢ ∝ 1/MASEᵢ (validation weeks only) |
-| `timesfm` | Google TimesFM 2.5 (200M) | Foundation model pre-trained on ~100B time points, forecasts zero-shot with its own quantiles | decoder-only transformer over 32-point patches, quantile head q10–q90 |
 
 **Why these.** Two years of weekly prices is ~100 points per vegetable: too little for per-item deep learning, but
 enough for exponential smoothing (ETS, Theta), and enough for a tree model when the vegetables are pooled
-(the M5 competition's lesson). TimesFM brings prior knowledge from other series, which is what short histories need.
+(the M5 competition's lesson).
 The two naive rules are there so every claim of skill has an honest reference.
 
-**Ranges.** TimesFM uses its own deciles. Every other model uses split-conformal intervals (`ml/intervals.py`):
+**Ranges.** Every model uses split-conformal intervals (`ml/intervals.py`):
 the 80% range at horizon h is the forecast × exp(±q), where q is the 80th percentile of that model's past absolute
 log errors at the same h. In logs, the range scales with the price.
 
@@ -80,8 +79,6 @@ Hold-out = each vegetable's newest 8 weeks. Lower MASE is better; skill is again
 | Sweet Potatoes | 2.149 | 2.162 | 2.309 | 1.984 | 2.488 | **0.908** | naive |
 | Tomatoes | **0.686** | 0.692 | 0.688 | 0.688 | 0.988 | 0.983 | ensemble |
 
-TimesFM is not in these tables: it was not scored in the environment that produced them (see "TimesFM" below).
-
 ### What the numbers say
 
 - **Weekly retail prices are close to a random walk.** Every model's mean MASE is above 1, and "same as last week"
@@ -102,28 +99,14 @@ TimesFM is not in these tables: it was not scored in the environment that produc
 - Re-run the pipeline after each USDA refresh: the expanding window and the moving hold-out make the scores more
   reliable as weeks accumulate.
 - Worth trying next: promotion features (USDA's ad counts are already stored: `current_ad_count`), a wider conformal
-  window that weights recent errors more, and TimesFM once it can be scored on this data.
+  window that weights recent errors more.
 
-## TimesFM
+## Why there is no foundation model
 
-`ml/models/timesfm_model.py` wraps `timesfm.TimesFM_2p5_200M_torch` (weights `google/timesfm-2.5-200m-pytorch`).
-It needs Python ≥ 3.10, torch and ~1 GB of RAM, more than Render's free 512 MB instance, so the server offers it in
-one of three modes (`GET /forecast/models`):
-
-- **live**: `ENABLE_TIMESFM=1` and the packages import (a larger instance);
-- **stored**: someone ran `python -m scripts.offline_timesfm` against the same store, and the server serves those
-  backtests and 26-week forecasts;
-- **unavailable**: with the reason shown on its card.
-
-Status as of this guide: the previous session reported TimesFM 2.5 loading and forecasting on the developer's Mac
-(`backend/.venv-ml`). It has **not** been scored on this data yet: the cloud environment that produced the tables above
-cannot reach Hugging Face or the PyTorch package index. To score it, run on a machine that can:
-
-```bash
-cd backend
-python3.12 -m venv .venv-ml && .venv-ml/bin/pip install -r requirements.txt "timesfm[torch]>=2.0"
-SUPABASE_DB_URL=... .venv-ml/bin/python -m scripts.offline_timesfm
-```
+Google's TimesFM 2.5 was planned as a seventh model. It was removed on 29 Oct 2026: it needs about 1 GB of RAM and
+PyTorch, more than the free Render instance (512 MB) can hold, so it could only ever have run offline on another
+machine, and it was never scored on this data. Adding a foundation model later means a new class in `ml/models/`
+registered in `ml/models/__init__.py`; the backtest, leaderboard and studio pick it up from the registry.
 
 ## Model card
 

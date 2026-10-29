@@ -42,6 +42,7 @@ export default function PredictionsTab() {
   const { models, board, active, modelId, params, sample, shown, stale, compareLines, apply } = studio;
 
   const modelList = models.status === 'ready' ? models.data.models : null;
+  const defaultModel = models.status === 'ready' ? models.data.default : null;
   const boardData = board.status === 'ready' ? board.data : null;
   const available = useMemo(() => new Set((modelList ?? []).filter((m) => m.available).map((m) => m.id)), [modelList]);
   const nameOf = (id: string | null | undefined) => (id ? (modelList?.find((m) => m.id === id)?.name ?? id) : null);
@@ -211,7 +212,7 @@ export default function PredictionsTab() {
                 </div>
                 {boardData && <span className="text-[12.5px] text-muted">Skill measured on {selectedCommodity.toLowerCase()} hold-out weeks</span>}
               </div>
-              <ModelPicker models={modelList} board={boardData} selected={modelId} onSelect={studio.selectModel} />
+              <ModelPicker models={modelList} defaultId={defaultModel} board={boardData} selected={modelId} onSelect={studio.selectModel} />
             </Panel>
           </div>
 

@@ -9,7 +9,6 @@ os.environ["MARS_API_KEY"] = ""
 os.environ["SMARTSTOCK_DB_PATH"] = os.path.join(tempfile.mkdtemp(prefix="smartstock-test-"), "store.db")
 # The app's startup seeds and trains the store in a background thread; tests drive the store explicitly
 os.environ["PIPELINE_ON_STARTUP"] = "0"
-os.environ["ENABLE_TIMESFM"] = "0"
 
 import pytest
 import requests

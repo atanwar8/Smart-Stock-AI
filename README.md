@@ -13,7 +13,7 @@ Produce price forecasting and smart ordering for restaurants. SmartStock learns 
 | --- | --- |
 | **Overview** | Price pulse for any vegetable (USDA history, then the forecast with a likely range), days of cover for every tracked item, what needs ordering, each model's forecast skill, and growing weather for any US ZIP code. |
 | **Smart ordering** | Log stock and daily use; get a recommended order quantity and cost, plus the cheapest day to buy over the next week. |
-| **Forecast studio** | Pick a model (Ensemble, LightGBM, ETS, Theta, seasonal naive, TimesFM where available), shape a sample prediction with sliders (horizon, confidence, history, a pace what-if), see how it did on held-out weeks, and **Apply** it. The applied forecast is saved and shown across the app. |
+| **Forecast studio** | Pick a model (Ensemble, LightGBM, ETS, Theta or seasonal naive), shape a sample prediction with sliders (horizon, confidence, history, a pace what-if), see how it did on held-out weeks, and **Apply** it. The applied forecast is saved and shown across the app. |
 | **Alerts** | Running-out, spoilage and price-move alerts, each explained in one sentence against your own rule, with Silence 24h / Not relevant and J/K keys. |
 | **Data refresh** | The Extract → Load → Train → Test pipeline: pulls only the USDA weeks newer than the store, appends them, and rescores every model. Shows the store's coverage and every past run. |
 
@@ -83,7 +83,6 @@ Copy `backend/.env.template` to `backend/.env` for local runs, or set these in t
 | `PIPELINE_TRAIN_ON_STARTUP` | `1` | Set `0` to skip that first scoring (the leaderboard then computes per vegetable on first view). |
 | `TEST_WEEKS` | `8` | Weeks held out for the leaderboard. |
 | `SERIES_REGION` | `Midwest` | USDA region the models use (every region is stored). |
-| `ENABLE_TIMESFM` | `0` | `1` runs TimesFM in the server (needs `timesfm` + `torch` and ~1 GB RAM). Otherwise the studio serves a stored offline run, or shows TimesFM as unavailable. |
 | `REFRESH_ON_STARTUP` | `1` | With a key set, pull new USDA weeks every time the server starts, then train the models. |
 | `SEED_DEMO_INVENTORY` | `1` | Starts with four tracked items so the dashboard isn't empty. Set `0` to start blank. |
 | `PRETRAIN_MODELS` | `1` | Trains every vegetable's model in the background at startup. |
@@ -117,7 +116,6 @@ backend/
   routers/forecast.py  /forecast/* and /pipeline/* routes
   ml/                  Models, rolling-origin backtests, conformal intervals, studio service, refresh pipeline
   store/               Training store (Supabase Postgres or SQLite), seeding
-  scripts/             offline_timesfm.py (score TimesFM on a bigger machine and store the results)
   core/usda_api.py     Data agent (USDA MyMarketNews API client)
   core/open_meteo.py   Weather by ZIP code from Open-Meteo (no key needed)
   core/                Forecast agent (weekly series, features, training, prediction)
@@ -135,7 +133,6 @@ start.sh               One-command local run
 ## Known limits
 
 - Inventory and alert settings live in memory, so they reset on restart or redeploy. USDA prices, model scores and applied forecasts persist in the training store when `SUPABASE_DB_URL` is set (on Render without it, the SQLite store is on temporary disk and is rebuilt from the CSV on each start).
-- TimesFM can't run on the free Render plan (512 MB); see the model guide for running it offline.
 - The free Render plan sleeps after 15 idle minutes and takes about a minute to wake.
 - Weather comes from [Open-Meteo](https://open-meteo.com/), free without a key for non-commercial use (under 10,000 calls a day; the app caches each ZIP for 30 minutes). Its data is CC BY 4.0, credited on each weather card. A commercial version of SmartStock would need an Open-Meteo plan ([ADR-005](docs/decisions/ADR-005-open-meteo-weather.md)).
 - **Data refresh** needs `MARS_API_KEY`; without it the button is disabled and the page says how to get one. Only one refresh runs at a time.

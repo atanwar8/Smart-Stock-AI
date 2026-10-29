@@ -27,7 +27,6 @@ from ml import service
 from ml.backtest import champion, evaluate
 from ml.config import SERIES_REGION
 from ml.models.gbm import LightGBMGlobal
-from ml.models.timesfm_model import TimesFM
 from ml.series import build_panel, tracked_commodities
 from store import get_store
 
@@ -66,11 +65,8 @@ _start_guard = threading.Lock()
 
 
 def live_models() -> List[str]:
-    """Every model the pipeline can score in this process (TimesFM only where it can run)."""
-    models = list(service.LIVE_MODELS)
-    if TimesFM.live_status()[0]:
-        models.insert(-1, "timesfm")
-    return models
+    """Every model the pipeline scores (the studio's models plus the naive baseline)."""
+    return list(service.LIVE_MODELS)
 
 
 def train_and_test(store=None, ingest_run_id: Optional[int] = None,
@@ -83,8 +79,6 @@ def train_and_test(store=None, ingest_run_id: Optional[int] = None,
     panel = build_panel(store.read_prices(region=SERIES_REGION))
     models = live_models()
     shared = {"lightgbm": LightGBMGlobal()}   # global model: one set of boosters serves every vegetable
-    if "timesfm" in models:
-        shared["timesfm"] = TimesFM()
     rows, champions = [], {}
     names = sorted(panel)
     for index, name in enumerate(names):

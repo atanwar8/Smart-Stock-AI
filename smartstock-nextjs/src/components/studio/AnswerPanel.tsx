@@ -168,7 +168,7 @@ function AnswerPanel({ preview, applied, loading, className }: AnswerPanelProps)
       <p className="mt-5 flex flex-wrap items-center gap-x-2 font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted">
         <span>{preview.model_name}</span>
         <span aria-hidden>·</span>
-        <span>{preview.mode === 'stored' ? 'Stored · computed offline' : preview.mode === 'live' ? 'Live' : preview.mode}</span>
+        <span>{preview.mode === 'live' ? 'Live' : preview.mode}</span>
         {finite(preview.elapsed_ms) && preview.elapsed_ms > 0 && (
           <>
             <span aria-hidden>·</span>

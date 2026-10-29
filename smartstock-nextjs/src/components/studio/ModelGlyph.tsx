@@ -2,11 +2,10 @@
 
 import { memo, type ReactNode } from 'react';
 
-type GlyphKind = 'foundation' | 'ensemble' | 'trees' | 'smooth' | 'theta' | 'repeat' | 'arima' | 'line';
+type GlyphKind = 'ensemble' | 'trees' | 'smooth' | 'theta' | 'repeat' | 'arima' | 'line';
 
 export function glyphKind(id: string, family = ''): GlyphKind {
   const text = `${id} ${family}`.toLowerCase();
-  if (text.includes('timesfm') || text.includes('foundation') || text.includes('chronos')) return 'foundation';
   if (text.includes('ensemble') || text.includes('blend')) return 'ensemble';
   if (text.includes('lightgbm') || text.includes('xgb') || text.includes('tree') || text.includes('boost')) return 'trees';
   if (text.includes('theta')) return 'theta';
@@ -17,12 +16,6 @@ export function glyphKind(id: string, family = ''): GlyphKind {
 }
 
 const SHAPES: Record<GlyphKind, ReactNode> = {
-  foundation: (
-    <>
-      <path d="M10 2.6 11.7 8.3 17.4 10 11.7 11.7 10 17.4 8.3 11.7 2.6 10 8.3 8.3Z" fill="currentColor" stroke="none" />
-      <path d="M15.6 2.4v3.2M14 4h3.2" />
-    </>
-  ),
   ensemble: (
     <>
       <circle cx="7.4" cy="8" r="4.2" />

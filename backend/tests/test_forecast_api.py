@@ -32,14 +32,12 @@ def preview(client, **overrides):
     return client.post("/api/forecast/preview", json=body)
 
 
-def test_models_lists_every_studio_model_and_explains_timesfm(client):
+def test_models_lists_every_studio_model_and_all_run_live(client):
     body = client.get("/api/forecast/models").json()
     ids = [m["id"] for m in body["models"]]
-    assert body["default"] == "ensemble"
-    assert {"seasonal_naive", "ets", "theta", "lightgbm", "timesfm", "ensemble"} <= set(ids)
-    timesfm = next(m for m in body["models"] if m["id"] == "timesfm")
-    assert timesfm["mode"] == "unavailable" and timesfm["available"] is False and timesfm["reason"]
-    assert all(m["mode"] == "live" for m in body["models"] if m["id"] != "timesfm")
+    assert body["default"] == "ensemble" and ids[0] == "ensemble"
+    assert ids == ["ensemble", "lightgbm", "ets", "theta", "seasonal_naive"]
+    assert all(m["available"] and m["mode"] == "live" and m["reason"] is None for m in body["models"])
 
 
 def test_preview_returns_history_backtest_forecast_and_metrics(client):
@@ -86,7 +84,7 @@ def test_errors_use_the_contract_status_codes(client):
     assert client.post("/api/forecast/apply", json={"preview_id": "00000000-0000-0000-0000-000000000000"}).status_code == 404
     assert preview(client, commodity="Dragonfruit").status_code == 404
     assert preview(client, model="prophet").status_code == 422
-    assert preview(client, model="timesfm").status_code == 409
+    assert preview(client, model="timesfm").status_code == 422   # removed model: unknown like any other
     assert preview(client, horizon_weeks=27).status_code == 422
     assert preview(client, confidence=0.99).status_code == 422
     assert preview(client, pace_pct=-50).status_code == 422

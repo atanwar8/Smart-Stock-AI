@@ -8,15 +8,14 @@ import pandas as pd
 from ml.models.base import Forecaster, future_index
 from ml.models.classical import DampedETS, Naive, SeasonalNaive, Theta
 from ml.models.gbm import LightGBMGlobal
-from ml.models.timesfm_model import TimesFM
 
 
 class Ensemble(Forecaster):
     """Weighted average of the best members: y_hat = sum_i w_i * y_hat_i, w_i proportional to 1 / MASE_i.
 
     Members and weights come from the rolling-origin validation on the training weeks (never the hold-out),
-    so the ensemble's hold-out score is as honest as every other model's. Members are the always-live models
-    (not TimesFM), so the ensemble can be reproduced on a 512 MB server.
+    so the ensemble's hold-out score is as honest as every other model's. Members are cheap enough to refit
+    on a 512 MB server.
     """
     id, name, family, speed = "ensemble", "Ensemble", "Inverse-MASE weighted combination", "fast"
     blurb = "Blends the three best models on past weeks, weighted by how accurate each one was."
@@ -48,8 +47,8 @@ class Ensemble(Forecaster):
         return points, None
 
 
-MODELS = {cls.id: cls for cls in (Naive, SeasonalNaive, DampedETS, Theta, LightGBMGlobal, TimesFM, Ensemble)}
-ORDER = ["ensemble", "timesfm", "lightgbm", "ets", "theta", "seasonal_naive", "naive"]
+MODELS = {cls.id: cls for cls in (Naive, SeasonalNaive, DampedETS, Theta, LightGBMGlobal, Ensemble)}
+ORDER = ["ensemble", "lightgbm", "ets", "theta", "seasonal_naive", "naive"]
 ENSEMBLE_CANDIDATES = ("naive", "seasonal_naive", "ets", "theta", "lightgbm")
 ENSEMBLE_SIZE = 3
 

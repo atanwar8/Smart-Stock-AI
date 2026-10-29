@@ -120,23 +120,23 @@ Commodity names are the ones `/commodities` returns today (e.g. `Tomatoes`, `Oni
 ```json
 { "default": "ensemble",
   "models": [
-    { "id": "timesfm", "name": "TimesFM 2.5", "family": "Foundation model (Google, zero-shot)",
-      "available": true, "mode": "live" ,
-      "reason": null, "speed": "slow",
-      "blurb": "Pre-trained on 100B+ real time points; forecasts without per-item training." },
+    { "id": "ensemble", "name": "Ensemble", "family": "Inverse-MASE weighted combination",
+      "available": true, "mode": "live", "reason": null, "speed": "fast",
+      "blurb": "Blends the three best models on past weeks, weighted by how accurate each one was." },
     { "id": "lightgbm", "name": "LightGBM", "family": "Gradient-boosted trees", "available": true, "mode": "live", "reason": null, "speed": "fast", "blurb": "..." }
   ] }
 ```
-`mode`: `"live"` (runs in this server), `"stored"` (served from the latest offline run in Supabase, e.g.
-TimesFM when the server can't load it), or `"unavailable"` (then `available:false` and `reason` explains).
-Model ids, at minimum: `seasonal_naive`, `ets`, `theta`, `lightgbm`, `timesfm`, `ensemble` (more allowed).
+`mode`: `"live"` (runs in this server) or `"unavailable"` (then `available:false` and `reason` explains).
+Every model runs live today; the field stays so a future model can be listed as unavailable.
+Model ids: `ensemble`, `lightgbm`, `ets`, `theta`, `seasonal_naive` (more allowed). The UI shows `default` as the
+hero card. TimesFM was removed on 2026-10-29 (needs ~1 GB RAM; never scored on this data): `model: "timesfm"` is a 422.
 
 ### `GET /forecast/leaderboard?commodity=Tomatoes`
 ```json
 { "commodity": "Tomatoes", "unit": "per lb",
   "train_start": "2023-07-28", "train_end": "2025-05-30", "test_start": "2025-06-06", "test_end": "2025-07-25",
   "test_weeks": 8, "champion": "ensemble", "updated_at": "2026-10-28T21:04:00Z",
-  "rows": [ { "model": "timesfm", "name": "TimesFM 2.5", "mae": 0.12, "rmse": 0.15, "mape": 5.1, "smape": 5.0,
+  "rows": [ { "model": "lightgbm", "name": "LightGBM (global)", "mae": 0.12, "rmse": 0.15, "mape": 5.1, "smape": 5.0,
               "mase": 0.82, "coverage": 0.79, "skill": 0.18, "rank": 1 } ] }
 ```
 `skill` = 1 − MAE_model / MAE_seasonal-naive on the same hold-out (positive = better than the baseline).
@@ -145,14 +145,14 @@ Model ids, at minimum: `seasonal_naive`, `ets`, `theta`, `lightgbm`, `timesfm`, 
 ### `POST /forecast/preview`
 Request:
 ```json
-{ "commodity": "Tomatoes", "model": "timesfm", "horizon_weeks": 8, "confidence": 0.8,
+{ "commodity": "Tomatoes", "model": "lightgbm", "horizon_weeks": 8, "confidence": 0.8,
   "history_years": 2, "pace_pct": 0 }
 ```
 Bounds: `horizon_weeks` 1–26, `confidence` 0.5–0.95, `history_years` 1–15 or `null` = everything stored,
 `pace_pct` −40…+60 (scenario: forecast drifts linearly to `(1+pace_pct/100)×` by the last week).
 Response (also persisted as a `forecasts` row with `status='preview'`):
 ```json
-{ "preview_id": "uuid", "commodity": "Tomatoes", "unit": "per lb", "model": "timesfm", "model_name": "TimesFM 2.5",
+{ "preview_id": "uuid", "commodity": "Tomatoes", "unit": "per lb", "model": "lightgbm", "model_name": "LightGBM (global)",
   "mode": "live",
   "params": { "horizon_weeks": 8, "confidence": 0.8, "history_years": 2, "pace_pct": 0 },
   "history":  [ { "date": "2025-01-03", "price": 2.10 } ],
@@ -173,7 +173,7 @@ Response (also persisted as a `forecasts` row with `status='preview'`):
 
 ### `GET /forecast/active` (optional `?commodity=`)
 ```json
-{ "items": [ { "forecast_id": "uuid", "commodity": "Tomatoes", "unit": "per lb", "model": "timesfm", "model_name": "TimesFM 2.5",
+{ "items": [ { "forecast_id": "uuid", "commodity": "Tomatoes", "unit": "per lb", "model": "lightgbm", "model_name": "LightGBM (global)",
                "applied_at": "...", "params": { ... }, "forecast": [ { "date": "...", "yhat": 0, "lo": 0, "hi": 0 } ], "summary": "..." } ] }
 ```
 
@@ -181,7 +181,7 @@ Response (also persisted as a `forecasts` row with `status='preview'`):
 ### `GET /pipeline/status`
 ```json
 { "state": "idle|running|succeeded|failed",
-  "step": "extract|load|train|test|done", "progress": 0.0, "message": "Fitting TimesFM on Tomatoes (3/11)",
+  "step": "extract|load|train|test|done", "progress": 0.0, "message": "Fitting LightGBM (global) on Tomatoes (3/11)",
   "store": { "backend": "supabase|local", "rows": 6783, "first_date": "2023-07-28", "last_date": "2025-07-25", "commodities": 11 },
   "last_run": { "id": 3, "started_at": "...", "finished_at": "...", "window_start": "2025-07-25", "window_end": "2026-10-28",
                 "rows_fetched": 0, "rows_inserted": 0, "rows_updated": 0, "status": "succeeded", "error": null },
@@ -206,7 +206,7 @@ Supabase project **Smart-Stock-AI** (`vzxwqcxckafumughmgpc`, us-west-2). Schema 
    - *Train:* each tracked commodity's weekly series from **all stored weeks** (expanding window: the 2-year
      seed plus every delta since), so old data never vanishes.
    - *Test:* hold out the newest `TEST_WEEKS` (default 8) and run rolling-origin backtests; write one
-     `training_runs` row per (commodity, model) with metrics; mark the champion. TimesFM is part of the test.
+     `training_runs` row per (commodity, model) with metrics; mark the champion.
    - No key or no new weeks → the run is recorded as `skipped` with the reason, and training/testing still
      runs on what is stored.
 3. **Store abstraction** (`backend/store/`): Postgres when `SUPABASE_DB_URL` is set (SQLAlchemy Core +
@@ -216,15 +216,10 @@ Supabase project **Smart-Stock-AI** (`vzxwqcxckafumughmgpc`, us-west-2). Schema 
    (`backend/var/smartstock.db`, gitignored) with the same tables. Tests use SQLite in a temp dir.
 4. **Models** (`backend/ml/`): a small registry with one interface (`fit(series) -> self`,
    `predict(h, quantiles) -> frame`), at minimum seasonal-naive, ETS (damped), Theta, LightGBM (log-price,
-   lag + calendar features, direct or recursive), **TimesFM 2.5 (google/timesfm-2.5-200m-pytorch)** and an
-   ensemble. Intervals: model-native quantiles when available (TimesFM), otherwise split-conformal
-   residual quantiles from the backtest, per horizon step. Metrics: MAE, RMSE, MAPE, sMAPE, MASE, coverage,
+   lag + calendar features, direct or recursive) and an ensemble. Intervals: split-conformal residual
+   quantiles from the backtest, per horizon step. Metrics: MAE, RMSE, MAPE, sMAPE, MASE, coverage,
    skill vs seasonal-naive.
-5. **TimesFM in production:** the free Render plan has 512 MB RAM; TimesFM 2.5-200M needs ~1 GB. So:
-   live when `timesfm` imports and `ENABLE_TIMESFM=1`; otherwise `mode:"stored"` from the latest offline
-   run (`python -m scripts.offline_timesfm` on a machine that can run it writes forecasts/metrics to the
-   store); otherwise `unavailable` with a reason. Install TimesFM in a **separate** venv
-   (`backend/.venv-ml`, Python 3.12 at `/opt/homebrew/bin/python3.12`) — never in `backend/.venv`.
+5. *(Removed 2026-10-29: TimesFM in production. It needed ~1 GB RAM against Render's 512 MB.)*
 6. Deliver `docs/ml/MODEL_GUIDE.md`: the deep model analysis the user asked for (what each model is, the
    math in plain notation, why it suits weekly retail produce prices, measured results table from the real
    backtest on this data, recommendation), plus a model card. The coordinator links it from the README.

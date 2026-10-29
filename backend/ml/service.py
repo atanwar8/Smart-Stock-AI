@@ -3,7 +3,7 @@
 Where every number comes from:
   * prices      - the training store (store.get_store()), one region (ml.config.SERIES_REGION), as weekly series
   * backtest    - ml.backtest.evaluate(): rolling-origin forecasts on the stored weeks, hold-out = newest TEST_WEEKS
-  * intervals   - the model's own deciles (TimesFM) or split-conformal widths from the same backtest
+  * intervals   - split-conformal widths from the same backtest
   * forecast    - the model refit on every stored week in the chosen history window, TIMES the pace scenario
 
 Caching: everything expensive is a pure function of (data version, commodity, model, history window), so it is
@@ -27,7 +27,6 @@ from ml.backtest import ModelEval, evaluate
 from ml.config import DEFAULT_CONFIDENCE, MAX_HORIZON, SERIES_REGION, TEST_WEEKS
 from ml.models import MODELS, ORDER, Ensemble, create
 from ml.models.gbm import LightGBMGlobal
-from ml.models.timesfm_model import TimesFM
 from ml.series import WeeklySeries, _key, build_panel, truncate_panel
 from store import Conflict, NotFound, get_store  # noqa: F401  (re-exported for the router)
 
@@ -124,45 +123,19 @@ def _gbm(years_key) -> LightGBMGlobal:
 # ---------------------------------------------------------------------------------------------- models
 
 
-def model_status(model_id: str) -> Tuple[str, Optional[str]]:
-    """(mode, reason): 'live' runs here, 'stored' comes from the latest offline run, 'unavailable' says why."""
-    if model_id != "timesfm":
-        return "live", None
-    live, reason = TimesFM.live_status()
-    if live:
-        return "live", None
-    if _stored_timesfm_runs():
-        return "stored", None
-    return "unavailable", (reason or "TimesFM is not available.") + (
-        " No offline TimesFM run is stored either (run `python -m scripts.offline_timesfm` on a machine with ~2 GB RAM).")
-
-
-def _stored_timesfm_runs() -> Dict[str, Dict]:
-    """{commodity: newest offline TimesFM training run} (cached per data version)."""
-    def load():
-        latest = get_store().latest_training_runs()
-        return {c: per_model["timesfm"] for c, per_model in latest.items()
-                if "timesfm" in per_model and (per_model["timesfm"].get("params") or {}).get("source") == "offline"}
-    return _memo.get(_version(), ("timesfm-stored",), load)
-
-
 def catalog() -> Dict:
     models = []
     for model_id in STUDIO_MODELS:
         cls = MODELS[model_id]
-        mode, reason = model_status(model_id)
-        models.append({"id": cls.id, "name": cls.name, "family": cls.family, "available": mode != "unavailable",
-                       "mode": mode, "reason": reason, "speed": cls.speed, "blurb": cls.blurb})
+        # Every studio model runs in this process; "mode"/"reason" stay in the response for the SPEC §5 contract
+        models.append({"id": cls.id, "name": cls.name, "family": cls.family, "available": True,
+                       "mode": "live", "reason": None, "speed": cls.speed, "blurb": cls.blurb})
     return {"default": DEFAULT_MODEL, "models": models}
 
 
-def _require_model(model_id: str) -> str:
+def _require_model(model_id: str) -> None:
     if model_id not in STUDIO_MODELS:
         raise StudioError(422, f"Unknown model {model_id!r}. Choose one of: {', '.join(STUDIO_MODELS)}.")
-    mode, reason = model_status(model_id)
-    if mode == "unavailable":
-        raise StudioError(409, reason or f"{model_id} is unavailable on this server.")
-    return mode
 
 
 # ---------------------------------------------------------------------------------------------- evaluations
@@ -175,7 +148,7 @@ class Evaluation:
     commodity: str
     unit: str
     metrics: Dict
-    backtest: List[Dict]                       # the 8-week path forecast at train_end (with deciles for TimesFM)
+    backtest: List[Dict]                       # the 8-week path forecast at train_end
     test_levels: List[float]
     calib_test: Optional[np.ndarray] = None    # conformal widths from pre-test errors (backtest bands)
     calib_full: Optional[np.ndarray] = None    # conformal widths from every out-of-sample error (future bands)
@@ -220,11 +193,6 @@ def _current_runs(commodity: str, last_date: str) -> Dict[str, Dict]:
 
 def evaluation(commodity: str, model_id: str, history_years: Optional[float] = None) -> Evaluation:
     series = panel()[commodity]
-    if model_id == "timesfm" and model_status("timesfm")[0] == "stored":
-        run = _stored_timesfm_runs().get(commodity)
-        if run is None:
-            raise StudioError(409, f"The stored TimesFM run has no forecast for {commodity}.")
-        return Evaluation.from_run(run)
     cut, years_key = _window(series, history_years)
 
     def compute():
@@ -242,18 +210,9 @@ def evaluation(commodity: str, model_id: str, history_years: Optional[float] = N
     return _memo.get(_version(), ("eval", commodity, model_id, years_key), compute)
 
 
-def future_path(commodity: str, model_id: str, history_years: Optional[float] = None) -> Tuple[pd.DatetimeIndex, np.ndarray, Optional[np.ndarray]]:
-    """(dates, yhat, deciles or None) for MAX_HORIZON weeks after the last stored week, from a fit on the window."""
+def future_path(commodity: str, model_id: str, history_years: Optional[float] = None) -> Tuple[pd.DatetimeIndex, np.ndarray]:
+    """(dates, yhat) for MAX_HORIZON weeks after the last stored week, from a fit on the history window."""
     series = panel()[commodity]
-    if model_id == "timesfm" and model_status("timesfm")[0] == "stored":
-        ev = evaluation(commodity, model_id)
-        stored = get_store().offline_forecast(ev.training_run_id) if ev.training_run_id else None
-        points = (stored or {}).get("points") or []
-        if not points:
-            raise StudioError(409, f"The stored TimesFM run has no forecast path for {commodity}.")
-        dates = pd.to_datetime([p["date"] for p in points])
-        deciles = np.asarray([p["deciles"] for p in points], float) if all("deciles" in p for p in points) else None
-        return dates, np.asarray([p["yhat"] for p in points], float), deciles
     cut, years_key = _window(series, history_years)
 
     def compute():
@@ -267,11 +226,7 @@ def future_path(commodity: str, model_id: str, history_years: Optional[float] = 
         else:
             model = create(model_id)
         frame = model.fit(cut.y, sub_panel, commodity).predict(MAX_HORIZON)
-        deciles = None
-        quantile_columns = [c for c in frame.columns if c.startswith("q")]
-        if quantile_columns:
-            deciles = frame[sorted(quantile_columns)].to_numpy(float)
-        return frame.index, np.maximum(frame["yhat"].to_numpy(float), 1e-6), deciles
+        return frame.index, np.maximum(frame["yhat"].to_numpy(float), 1e-6)
 
     return _memo.get(_version(), ("path", commodity, model_id, years_key), compute)
 
@@ -293,9 +248,6 @@ def leaderboard(commodity: str) -> Dict:
     def compute():
         evals: Dict[str, Evaluation] = {}
         for model_id in STUDIO_MODELS:
-            mode, _ = model_status(model_id)
-            if mode == "unavailable":
-                continue
             try:
                 evals[model_id] = evaluation(commodity, model_id)
             except StudioError:
@@ -343,9 +295,8 @@ def _summary(commodity: str, unit: str, recent: float, yhat: np.ndarray, lo: np.
             f"{_money(lo[-1])}–{_money(hi[-1])} {unit}.")
 
 
-def _bounds(yhat: np.ndarray, deciles: Optional[np.ndarray], table: Optional[np.ndarray], confidence: float):
-    if deciles is not None:
-        return intervals.quantile_bounds(deciles, confidence)
+def _bounds(yhat: np.ndarray, table: Optional[np.ndarray], confidence: float):
+    """Conformal band around a path: yhat * exp(+-q) with q the stored half-width per step (wide prior if none)."""
     widths = intervals.half_width(table, confidence, len(yhat)) if table is not None else np.full(len(yhat), 0.15)
     return yhat * np.exp(-widths), yhat * np.exp(widths)
 
@@ -359,17 +310,14 @@ def preview(commodity: str, model_id: str, horizon_weeks: int = 8, confidence: f
     """One sample forecast, stored as a 'preview' row so it can be applied later."""
     started = time.perf_counter()
     commodity = resolve_commodity(commodity)
-    mode = _require_model(model_id)
+    _require_model(model_id)
     series = panel()[commodity]
     cut, _ = _window(series, history_years)
     ev = evaluation(commodity, model_id, history_years)
-    dates, path, deciles = future_path(commodity, model_id, history_years)
-    if horizon_weeks > len(path):
-        raise StudioError(422, f"This model's stored forecast covers {len(path)} weeks; choose a shorter horizon.")
+    dates, path = future_path(commodity, model_id, history_years)
 
     yhat = path[:horizon_weeks]
-    step_deciles = deciles[:horizon_weeks] if deciles is not None else None
-    lo, hi = _bounds(yhat, step_deciles, ev.calib_full, confidence)
+    lo, hi = _bounds(yhat, ev.calib_full, confidence)
     # Pace scenario: the whole band drifts with the path, so the range stays proportional
     yhat, lo, hi = (intervals.scenario(v, pace_pct) for v in (yhat, lo, hi))
     forecast = [{"date": d.date().isoformat(), "yhat": round(float(y), 4), "lo": round(float(a), 4), "hi": round(float(b), 4)}
@@ -378,10 +326,8 @@ def preview(commodity: str, model_id: str, horizon_weeks: int = 8, confidence: f
     backtest = []
     for point in ev.backtest:
         h = int(point.get("h") or len(backtest) + 1)
-        if point.get("deciles") is not None:
-            b_lo, b_hi = intervals.quantile_bounds(np.asarray([point["deciles"]], float), confidence)
-        else:
-            b_lo, b_hi = _bounds(np.asarray([point["predicted"]], float), None, None if ev.calib_test is None else ev.calib_test[:, h - 1:h], confidence)
+        b_lo, b_hi = _bounds(np.asarray([point["predicted"]], float),
+                             None if ev.calib_test is None else ev.calib_test[:, h - 1:h], confidence)
         backtest.append({"date": point["date"], "actual": point.get("actual"), "predicted": point["predicted"],
                          "lo": round(float(b_lo[0]), 4), "hi": round(float(b_hi[0]), 4)})
 
@@ -394,16 +340,14 @@ def preview(commodity: str, model_id: str, horizon_weeks: int = 8, confidence: f
                "coverage": _r(coverage if coverage is not None else ev.metrics.get("coverage")),
                "skill": _r(ev.metrics.get("skill"))}
     summary = _summary(commodity, series.unit, float(observed.iloc[-4:].mean()), yhat, lo, hi, confidence, pace_pct)
-    if mode == "stored":
-        summary += " From the latest offline TimesFM run (history window fixed by that run)."
     params = {"horizon_weeks": horizon_weeks, "confidence": confidence, "history_years": history_years, "pace_pct": pace_pct}
 
     preview_id = get_store().insert_forecast({
         "commodity": commodity, "unit": series.unit, "model": model_id, "horizon_weeks": horizon_weeks,
         "confidence": confidence, "history_years": history_years, "pace_pct": pace_pct, "status": "preview",
-        "training_run_id": None, "points": forecast, "metrics": {**metrics, "mode": mode}, "summary": summary})
+        "training_run_id": None, "points": forecast, "metrics": metrics, "summary": summary})
     return {"preview_id": preview_id, "commodity": commodity, "unit": series.unit, "model": model_id,
-            "model_name": MODELS[model_id].name, "mode": mode, "params": params, "history": history,
+            "model_name": MODELS[model_id].name, "mode": "live", "params": params, "history": history,
             "backtest": backtest, "forecast": forecast, "metrics": metrics, "summary": summary,
             "train_window": {"start": cut.dates[0].date().isoformat(), "end": cut.dates[-1].date().isoformat(),
                              "weeks": int(cut.observed.sum())},

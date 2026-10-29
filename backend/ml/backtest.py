@@ -74,7 +74,6 @@ class ModelEval:
     plan: Plan
     dates: pd.DatetimeIndex
     points: np.ndarray                         # (n_origins, horizon)
-    deciles: Optional[np.ndarray] = None       # (n_origins, horizon, 9) for native-quantile models
     metrics: Dict = field(default_factory=dict)
     val_mase: float = float("nan")
     calib_test: Optional[np.ndarray] = None    # conformal table from pre-test errors
@@ -128,7 +127,7 @@ def forecast_matrix(model_id: str, series: WeeklySeries, plan: Plan, panel: Opti
 
 
 def score(model_id: str, series: WeeklySeries, plan: Plan, points: np.ndarray,
-          deciles: Optional[np.ndarray] = None, weights: Optional[Dict] = None) -> ModelEval:
+          weights: Optional[Dict] = None) -> ModelEval:
     y, observed = series.y.to_numpy(float), series.observed
     n, horizon, train_end = plan.n, plan.horizon, plan.train_end
     snaive = seasonal_naive_points(y, plan.origins, horizon)
@@ -157,15 +156,11 @@ def score(model_id: str, series: WeeklySeries, plan: Plan, points: np.ndarray,
                 test["pos"].append((row, h))
 
     ev = ModelEval(model=model_id, commodity=series.commodity, unit=series.unit, plan=plan, dates=series.dates,
-                   points=points, deciles=deciles, weights=weights)
-    if deciles is None:
-        ev.calib_test = intervals.conformal_table(cal_errors, horizon)
-        ev.calib_full = intervals.conformal_table(full_errors, horizon)
-        for (row, h), actual, pred in zip(test["pos"], test["actual"], test["pred"]):
-            ev.test_levels.append(intervals.conformal_level(abs(np.log(actual) - np.log(pred)), ev.calib_test[:, h - 1]))
-    else:
-        for (row, h), actual in zip(test["pos"], test["actual"]):
-            ev.test_levels.append(intervals.quantile_level(actual, deciles[row, h - 1]))
+                   points=points, weights=weights)
+    ev.calib_test = intervals.conformal_table(cal_errors, horizon)
+    ev.calib_full = intervals.conformal_table(full_errors, horizon)
+    for (row, h), actual, pred in zip(test["pos"], test["actual"], test["pred"]):
+        ev.test_levels.append(intervals.conformal_level(abs(np.log(actual) - np.log(pred)), ev.calib_test[:, h - 1]))
 
     ev.val_mase = metrics.mase(val_actual, val_pred, scale) if val_actual else float("nan")
     if test["actual"]:
@@ -180,8 +175,6 @@ def score(model_id: str, series: WeeklySeries, plan: Plan, points: np.ndarray,
         point = {"date": series.dates[target].date().isoformat(),
                  "actual": round(float(y[target]), 4) if observed[target] else None,
                  "predicted": round(float(points[row, h - 1]), 4), "h": h}
-        if deciles is not None:
-            point["deciles"] = np.round(deciles[row, h - 1], 4).tolist()
         ev.backtest.append(point)
     return ev
 
@@ -200,8 +193,8 @@ def evaluate(series: WeeklySeries, model_ids: List[str], panel: Optional[Dict] =
             continue
         if progress:
             progress(model_id)
-        points, deciles = forecast_matrix(model_id, series, plan, panel, models.get(model_id))
-        results[model_id] = score(model_id, series, plan, points, deciles)
+        points, _ = forecast_matrix(model_id, series, plan, panel, models.get(model_id))
+        results[model_id] = score(model_id, series, plan, points)
     if "ensemble" in wanted:
         weights = ensemble_weights({m: results[m].val_mase for m in ENSEMBLE_CANDIDATES if m in results})
         points = sum(w * results[m].points for m, w in weights.items()) / sum(weights.values())

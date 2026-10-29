@@ -1,25 +1,19 @@
-"""Prediction intervals: split-conformal widths per horizon step, or a model's own quantiles.
+"""Prediction intervals: split-conformal widths per horizon step.
 
-Conformal (every model without native quantiles): from rolling-origin backtests we have, for each horizon
+From rolling-origin backtests we have, for each horizon
 step h, out-of-sample log errors e = log(actual) - log(forecast). The interval at confidence c is
 forecast * exp(+-q_c(h)), where q_c(h) is the ceil((n+1)c)-th smallest |e| among the n errors at step h.
 If future errors are exchangeable with past ones, the interval covers with probability >= c (Vovk et al.;
 Stankeviciute et al. 2021 for multi-step series). Working in logs makes widths proportional to price.
-
-Native (TimesFM): the model returns deciles q10..q90 per step. Levels inside 0.8 interpolate between
-deciles; wider levels extend the tails with a normal fitted to the q10-q90 spread.
 """
 
 from typing import List, Optional, Sequence
 
 import numpy as np
-from scipy.stats import norm
 
 from ml.config import MIN_CALIBRATION
 
 LEVELS = np.round(np.arange(0.50, 0.951, 0.05), 2)     # confidence grid the tables are stored on
-DECILES = np.round(np.arange(0.1, 0.91, 0.1), 1)        # TimesFM quantile head (q10..q90)
-Z90 = norm.ppf(0.9)
 
 
 def conformal_table(abs_errors: Sequence[Sequence[float]], horizon: int) -> np.ndarray:
@@ -74,34 +68,6 @@ def conformal_level(abs_error: float, column: Sequence[float]) -> float:
     lo_w, hi_w = column[idx - 1], column[idx]
     frac = 0 if hi_w == lo_w else (abs_error - lo_w) / (hi_w - lo_w)
     return float(LEVELS[idx - 1] + frac * (LEVELS[idx] - LEVELS[idx - 1]))
-
-
-def _sigma(deciles: np.ndarray) -> np.ndarray:
-    return np.maximum((deciles[..., -1] - deciles[..., 0]) / (2 * Z90), 1e-9)
-
-
-def quantile_bounds(deciles, confidence: float):
-    """(lo, hi) per step from deciles shaped (steps, 9)."""
-    deciles = np.sort(np.asarray(deciles, float), axis=-1)
-    p_lo, p_hi = (1 - confidence) / 2, (1 + confidence) / 2
-    if p_lo >= DECILES[0] - 1e-9:
-        lo = np.array([np.interp(p_lo, DECILES, d) for d in deciles])
-        hi = np.array([np.interp(p_hi, DECILES, d) for d in deciles])
-        return lo, hi
-    sigma, median = _sigma(deciles), deciles[..., 4]
-    z = norm.ppf(p_hi)
-    return np.minimum(deciles[..., 0], median - z * sigma), np.maximum(deciles[..., -1], median + z * sigma)
-
-
-def quantile_level(actual: float, deciles: Sequence[float]) -> float:
-    """Smallest central level of the model's own distribution that contains the actual: |2 F(actual) - 1|."""
-    deciles = np.sort(np.asarray(deciles, float))
-    if deciles[0] <= actual <= deciles[-1]:
-        tau = float(np.interp(actual, deciles, DECILES))
-    else:
-        tau = float(norm.cdf((actual - deciles[4]) / _sigma(deciles)))
-        tau = min(tau, 0.1) if actual < deciles[0] else max(tau, 0.9)
-    return abs(2 * tau - 1)
 
 
 def scenario(values: np.ndarray, pace_pct: float) -> np.ndarray:

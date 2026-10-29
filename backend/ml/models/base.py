@@ -2,8 +2,8 @@
 
 Models see a regular weekly price series (pd.Series on a 7-day grid). Backtests call forecast_origins(),
 which by default refits on y[:origin + 1] for every origin, so a model can never see a week after its
-forecast origin. Models with a cheaper exact equivalent (batched TimesFM, a global LightGBM refit on a
-schedule) override it, and the no-look-ahead tests cover those overrides too.
+forecast origin. Models with a cheaper exact equivalent (a global LightGBM refit on a schedule)
+override it, and the no-look-ahead tests cover those overrides too.
 """
 
 from typing import Dict, List, Optional, Sequence
@@ -24,7 +24,6 @@ class Forecaster:
     family = ""
     speed = "fast"
     blurb = ""
-    native_quantiles = False   # True: predict() returns its own deciles (q0.1 .. q0.9)
     uses_panel = False         # True: fit() also learns from the other commodities (cross-learning)
 
     def __init__(self):
@@ -48,7 +47,7 @@ class Forecaster:
                          commodity: Optional[str] = None):
         """Point forecasts (len(origins), h) made at each origin from y[:origin + 1] only.
 
-        Returns (points, deciles-or-None).
+        Returns (points, None); the second slot is kept so overrides share one signature.
         """
         points = np.full((len(origins), h), np.nan)
         for row, origin in enumerate(origins):

@@ -10,11 +10,11 @@ No imports from `ui.tsx` or `Chart.tsx`; only SPEC §3 token utilities, `Produce
   With `NEXT_PUBLIC_STUDIO_MOCK=1` every call is answered by `studio/mock.ts` via a single inlined dynamic import
   (dropped from production builds).
 - `studio/mock.ts`: deterministic synthetic store (105 weekly report dates 2023-07-28 → 2025-07-25), 6 live models +
-  1 unavailable (Prophet) to show the disabled state, realistic latencies (TimesFM ~2 s), abort-aware, apply with
+  1 unavailable (Prophet) to show the disabled state, realistic latencies, abort-aware, apply with
   404/409 semantics, Tomatoes has a seeded "applied yesterday" forecast.
 - Components in `studio/`: `useStudio` (all state; 350 ms debounce; compare lines; apply flow; toast), `Slider`
   (custom role=slider: arrows, PageUp/Down, Home/End, pointer drag, ticks, center "as forecast" mark),
-  `ProduceSwitcher` (radiogroup of ProduceIcon bubbles, roving tabindex), `ModelPicker` (TimesFM hero card = the
+  `ProduceSwitcher` (radiogroup of ProduceIcon bubbles, roving tabindex), `ModelPicker` (hero card = the server's default model, the
   page's one night card; skill + rank from leaderboard; Live / Stored · computed offline / Unavailable + reason),
   `Knobs` (horizon 1–26 w/ 4/8/13/26 ticks, confidence 50–95, history 1/2/3/5/All snaps, pace −40…+60), `ChartCard`
   + lazily loaded `ForecastChart` (hand-made SVG, monotone curves, hold-out dots vs predicted ticks, cone, today

@@ -12,7 +12,7 @@ If you are the next agent: read SPEC.md, then those four notes, then finish the 
    code splitting, CDN, pagination, Lighthouse, minify, lazy loading, defer scripts, unused deps, connection pooling).
 3. **Supabase training pipeline:** 2 years of USDA data stored in Supabase as the base training set; each refresh extracts only
    the new weeks since the newest stored report, appends them (never deleting), retrains on the expanding window, and tests
-   (TimesFM included). Several selectable models (TimesFM, LightGBM, others) after a deep analysis; README explains it.
+   (TimesFM was planned, then removed by the user on 2026-10-29). Several selectable models after a deep analysis; README explains it.
 4. **Forecast Studio UI:** model picker, sliders (horizon, confidence, history, pace), rotating "predicting" animation,
    a **sample prediction** that the user can **Apply** (Wispr Flow-style suggestion).
 
@@ -41,7 +41,7 @@ If you are the next agent: read SPEC.md, then those four notes, then finish the 
 ## Resumed 2026-10-29 (cloud session)
 What the four agents left unfinished, and what was done about it:
 - **ml-pipeline**: `ml/service.py`, `ml/pipeline.py`, `routers/forecast.py` (was an 8-line stub), `core/usda_api.fetch_window`,
-  `scripts/offline_timesfm.py`, tests (`test_store`, `test_pipeline`, `test_forecast_api`, `test_ml_models`) and
+  tests (`test_store`, `test_pipeline`, `test_forecast_api`, `test_ml_models`) and
   `docs/ml/MODEL_GUIDE.md` written. ADR-006 records the store decision.
 - **frontend-shell**: Alerts and Data refresh pages finished, Plotly removed, lint warning fixed (see frontend-shell.md).
 - **frontend-studio**: verified against the real backend (Sample prediction -> Apply in a browser). The answer headline now
@@ -53,7 +53,9 @@ What the four agents left unfinished, and what was done about it:
 
 Verified in the cloud: 75 backend tests pass on Python 3.11; tsc, lint, build and npm audit clean; every section at
 1440 and 375 px with no console errors and no horizontal scroll; Lighthouse desktop 100/100/100/100, mobile 88/100/100/100.
-Not verified in the cloud: TimesFM (Hugging Face and the PyTorch index are blocked there), a real USDA refresh (no
+TimesFM removed on 2026-10-29 at the user's request (too big for Render's free plan, never scored): model, offline
+script, decile intervals and the studio's TimesFM card are gone; the Ensemble now has the hero card.
+Not verified in the cloud: a real USDA refresh (no
 `MARS_API_KEY` there), the live Supabase store from the app (no `SUPABASE_DB_URL` there), the Docker image build.
 
 ## Coordinator checklist (remaining)
@@ -65,7 +67,6 @@ Not verified in the cloud: TimesFM (Hugging Face and the PyTorch index are block
       Supabase setup, configuration table (new env vars), perf checklist outcome, run/test/deploy.
 - [x] Seed Supabase once `SUPABASE_DB_URL` exists; verify row counts with the Supabase MCP; run `get_advisors`.
 - [ ] First real refresh into Supabase (2025-07-25 -> today) with `MARS_API_KEY` + `SUPABASE_DB_URL` set: `POST /api/pipeline/refresh`.
-- [ ] Score TimesFM offline on a machine that can load it: `python -m scripts.offline_timesfm` (see MODEL_GUIDE.md).
 - [ ] Add `SUPABASE_DB_URL` (session pooler) to the Render service before merging to `main` (merging deploys).
 - [ ] Decide on the Supabase advisor WARN about `public.rls_auto_enable()` (see above).
 - [ ] Open the pull request to `main` when the user asks.

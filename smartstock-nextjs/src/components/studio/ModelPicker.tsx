@@ -1,7 +1,8 @@
 'use client';
 
 // Model cards from /forecast/models, with the hold-out skill from the leaderboard and how each one runs.
-// TimesFM is the hero: the page's one dark "night market" card, spanning the row.
+// The server's default model (GET /forecast/models -> default, the Ensemble) is the hero: the page's one dark
+// "night market" card, spanning the row, so the recommended choice is the first thing a chef sees.
 
 import { memo, useMemo, type KeyboardEvent } from 'react';
 import { Check, Crown, Hourglass, Timer, Zap } from 'lucide-react';
@@ -13,12 +14,12 @@ import { useRadioGroup } from './useRadioGroup';
 
 interface ModelPickerProps {
   models: StudioModel[] | null;
+  /** Id of the server's recommended model, shown as the hero card */
+  defaultId: string | null;
   board: Leaderboard | null;
   selected: string | null;
   onSelect: (id: string) => void;
 }
-
-export const isHeroModel = (m: { id: string }) => m.id.toLowerCase().includes('timesfm');
 
 function SpeedIcon({ speed }: { speed: string }) {
   const Icon = speed === 'fast' ? Zap : speed === 'slow' ? Hourglass : Timer;
@@ -27,12 +28,6 @@ function SpeedIcon({ speed }: { speed: string }) {
 
 function ModeChip({ m, night }: { m: StudioModel; night?: boolean }) {
   if (!m.available || m.mode === 'unavailable') return <Chip tone={night ? 'night' : 'neutral'}>Unavailable</Chip>;
-  if (m.mode === 'stored')
-    return (
-      <Chip tone={night ? 'night' : 'neutral'} title="Served from the latest offline run">
-        Stored · computed offline
-      </Chip>
-    );
   return (
     <Chip tone={night ? 'night' : 'good'} dot>
       Live
@@ -55,9 +50,12 @@ function SkillChip({ skill, rank, champion, night }: { skill?: number; rank?: nu
   );
 }
 
-function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
+function ModelPicker({ models, defaultId, board, selected, onSelect }: ModelPickerProps) {
   // Hero first, then the rest in server order
-  const ordered = useMemo(() => (models ? [...models.filter(isHeroModel), ...models.filter((m) => !isHeroModel(m))] : []), [models]);
+  const ordered = useMemo(
+    () => (models ? [...models.filter((m) => m.id === defaultId), ...models.filter((m) => m.id !== defaultId)] : []),
+    [models, defaultId],
+  );
   const rows = useMemo(() => new Map((board?.rows ?? []).map((r) => [r.model, r])), [board]);
   const index = ordered.findIndex((m) => m.id === selected);
   const radio = useRadioGroup(
@@ -95,7 +93,7 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
           onClick: () => !disabled && onSelect(m.id),
         };
 
-        if (isHeroModel(m)) {
+        if (m.id === defaultId) {
           return (
             <button
               key={m.id}
@@ -124,7 +122,7 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
               <div className="relative flex items-start justify-between gap-3">
                 <p className="flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.16em] text-night-ink/75">
                   <ModelGlyph id={m.id} family={m.family} size={16} className="text-forecast" />
-                  Google · foundation model
+                  Recommended · {m.family}
                 </p>
                 <span className="flex items-center gap-2">
                   <ModeChip m={m} night />
@@ -145,7 +143,6 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
                   {speedLabel(m.speed)}
                 </Chip>
                 <SkillChip skill={row?.skill} rank={row?.rank} champion={champion} night />
-                <Chip tone="night">Zero-shot · no per-item training</Chip>
               </div>
             </button>
           );

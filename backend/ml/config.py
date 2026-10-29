@@ -1,4 +1,4 @@
-"""Forecasting settings shared by the pipeline, the API and the offline scripts (env-overridable)."""
+"""Forecasting settings shared by the pipeline, the API and the tests (env-overridable)."""
 
 import os
 
@@ -21,6 +21,3 @@ DEFAULT_CONFIDENCE = 0.8
 # pinned to one region to keep it comparable over time (all regions are still stored).
 SERIES_REGION = os.getenv("SERIES_REGION", "Midwest")
 
-
-def timesfm_enabled() -> bool:
-    return os.getenv("ENABLE_TIMESFM", "0") == "1"

@@ -23,6 +23,5 @@ out/
 .env*
 !.env.template
 
-# Local training store, ML venv (TimesFM), model weights cache
+# Local training store
 backend/var/
-backend/.venv-ml/

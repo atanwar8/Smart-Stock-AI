@@ -5,7 +5,7 @@
 
 import { getJSON, postJSON } from '@/lib/api';
 
-export type ModelMode = 'live' | 'stored' | 'unavailable';
+export type ModelMode = 'live' | 'unavailable';
 
 export interface StudioModel {
   id: string;

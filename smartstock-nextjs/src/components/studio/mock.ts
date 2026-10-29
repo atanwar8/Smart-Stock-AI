@@ -25,8 +25,7 @@ const TEST_WEEKS = 8;
 const WEEK = 7 * 86_400_000;
 
 const MODELS: StudioModel[] = [
-  { id: 'ensemble', name: 'Ensemble', family: 'Weighted blend', available: true, mode: 'live', reason: null, speed: 'medium', blurb: 'Blends ETS, Theta, LightGBM and TimesFM, weighted by how each did on the hold-out.' },
-  { id: 'timesfm', name: 'TimesFM 2.5', family: 'Foundation model (Google, zero-shot)', available: true, mode: 'live', reason: null, speed: 'slow', blurb: 'Pre-trained on 100B+ real time points; forecasts without per-item training.' },
+  { id: 'ensemble', name: 'Ensemble', family: 'Weighted blend', available: true, mode: 'live', reason: null, speed: 'medium', blurb: 'Blends the three best models on past weeks, weighted by how accurate each one was.' },
   { id: 'lightgbm', name: 'LightGBM', family: 'Gradient-boosted trees', available: true, mode: 'live', reason: null, speed: 'fast', blurb: 'Learns from recent weeks and the calendar; quick and sharp on steady items.' },
   { id: 'ets', name: 'ETS (damped)', family: 'Exponential smoothing', available: true, mode: 'live', reason: null, speed: 'fast', blurb: 'Trusts recent weeks most and lets a trend fade instead of running away.' },
   { id: 'theta', name: 'Theta', family: 'Trend + smoothing', available: true, mode: 'live', reason: null, speed: 'fast', blurb: 'A long-run trend line blended with a short-run smoother. A sturdy classic.' },
@@ -35,7 +34,7 @@ const MODELS: StudioModel[] = [
 ];
 
 // Relative hold-out error vs the seasonal-naive baseline (lower is better)
-const QUALITY: Record<string, number> = { seasonal_naive: 1, ets: 0.87, theta: 0.9, lightgbm: 0.84, timesfm: 0.77, ensemble: 0.8 };
+const QUALITY: Record<string, number> = { seasonal_naive: 1, ets: 0.87, theta: 0.9, lightgbm: 0.84, ensemble: 0.8 };
 const LATENCY: Record<string, [number, number]> = { fast: [450, 300], medium: [900, 400], slow: [1700, 900] };
 
 const PRICES: [RegExp, number, string][] = [
@@ -195,13 +194,12 @@ function forecastFor(series: Series, req: PreviewRequest, sigma: number): Foreca
   const last = series.points[n - 1];
   const lastMs = Date.parse(`${last.date}T00:00:00Z`);
   const wave = (i: number) => series.base * series.amp * Math.sin((2 * Math.PI * i) / 52 + series.phase);
-  const skew = req.model === 'timesfm' ? 1.15 : 1;
   const out: ForecastPoint[] = [];
   for (let k = 1; k <= req.horizon_weeks; k++) {
     const base = last.price + (wave(n - 1 + k) - wave(n - 1)) * (req.model === 'seasonal_naive' ? 1.1 : 0.85) + bias * k;
     const yhat = base * (1 + (req.pace_pct / 100) * (k / req.horizon_weeks));
     const half = z * sigma * Math.sqrt(k) * 0.9;
-    out.push({ date: iso(lastMs + k * WEEK), yhat: cents(yhat), lo: cents(Math.max(0.05, yhat - half)), hi: cents(yhat + half * skew) });
+    out.push({ date: iso(lastMs + k * WEEK), yhat: cents(yhat), lo: cents(Math.max(0.05, yhat - half)), hi: cents(yhat + half) });
   }
   return out;
 }

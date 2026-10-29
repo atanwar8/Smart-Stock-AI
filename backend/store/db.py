@@ -458,15 +458,8 @@ class Store:
         with self.engine.connect() as conn:
             return [self._forecast_dict(r) for r in conn.execute(query).mappings().all()]
 
-    def offline_forecast(self, training_run_id: int) -> Optional[Dict]:
-        """The forecast an offline run (e.g. TimesFM) stored next to its training run."""
-        with self.engine.connect() as conn:
-            row = conn.execute(select(forecasts).where(forecasts.c.training_run_id == training_run_id)
-                               .order_by(forecasts.c.created_at.desc()).limit(1)).mappings().first()
-        return self._forecast_dict(row) if row else None
-
     def prune_previews(self, older_than: timedelta = timedelta(days=7)) -> int:
-        """Drop never-applied slider previews after a week (offline-run forecasts keep their training_run_id)."""
+        """Drop never-applied slider previews after a week (rows linked to a training run are kept)."""
         from sqlalchemy import delete
         cutoff = utcnow() - older_than
         with self.engine.begin() as conn:
