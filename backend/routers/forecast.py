@@ -8,7 +8,7 @@ import os
 import threading
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ml import pipeline, service
@@ -96,18 +96,6 @@ def pipeline_refresh(response: Response):
     except pipeline.Busy as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
-
-@router.get("/pipeline/cron")
-def pipeline_cron(authorization: Optional[str] = Header(None)):
-    """The scheduled refresh (vercel.json "crons", weekly, after USDA's Friday retail report). Vercel sends
-    "Authorization: Bearer <CRON_SECRET>" when the CRON_SECRET variable is set, and then nobody else can start it."""
-    secret = os.getenv("CRON_SECRET")
-    if secret and authorization != f"Bearer {secret}":
-        raise HTTPException(status_code=401, detail="Only the scheduled job can call this.")
-    try:
-        return pipeline.run_now()
-    except pipeline.Busy as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.get("/pipeline/status")

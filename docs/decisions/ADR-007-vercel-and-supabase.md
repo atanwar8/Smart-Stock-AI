@@ -22,9 +22,9 @@ a second per vegetable and quoted older prices than the Forecast Studio (the CSV
   (`api/index.py`, region `pdx1` next to Supabase us-west-2), `/api/(.*)` rewritten to it (`vercel.json`).
 - **Nothing heavy at startup on Vercel** (`VERCEL=1`): no pretraining, no CSV refresh, no store preparation. If the
   runtime skips ASGI startup events, the app initializes on its first request.
-- **The refresh runs inside a request**: `POST /pipeline/refresh` (the Data refresh button) and `GET /pipeline/cron`
-  (Vercel Cron, Saturdays after USDA's Friday report, guarded by `CRON_SECRET`) run Extract -> Load -> Train -> Test
-  synchronously; about 70 s measured, the function may run 300 s. Status pages on other instances see the run's
+- **The refresh runs inside a request, and only on demand**: `POST /pipeline/refresh` (the Data refresh button) runs
+  Extract -> Load -> Train -> Test synchronously; there is no schedule (the user's decision, 30 Oct 2026: data is
+  pulled only when someone clicks Data refresh, from the newest stored week to today); about 70 s measured, the function may run 300 s. Status pages on other instances see the run's
   `ingest_runs` row as "running" (rows older than 15 minutes are treated as abandoned).
 - **Train once, read everywhere**: the dashboard's price history is the training store's rows for the pipeline's
   region, and every daily forecast adopts the pipeline's stored champion path (lowest hold-out MASE) when it was

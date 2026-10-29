@@ -39,8 +39,8 @@ from ml.config import SERIES_REGION
 import requests
 
 # On Vercel (and other serverless hosts) an instance can start for any request and is frozen between requests,
-# so nothing heavy runs at startup or in background threads: the scheduled refresh (vercel.json crons ->
-# /pipeline/cron) trains, and every page reads what it stored.
+# so nothing heavy runs at startup or in background threads: data is pulled and the models trained only when
+# someone clicks Data refresh (/pipeline/refresh, inside that request), and every page reads what it stored.
 SERVERLESS = bool(os.getenv('VERCEL'))
 
 # Inventory Management Data Models

@@ -27,14 +27,15 @@ def test_vercel_installs_the_backends_versions():
     assert {name: vercel.get(name) for name in backend} == backend
 
 
-def test_vercel_routes_the_api_and_the_weekly_refresh_to_the_function():
+def test_vercel_routes_the_api_to_the_function_and_schedules_nothing():
     config = json.loads((ROOT / "vercel.json").read_text())
     assert (ROOT / "api" / "index.py").exists() and "api/index.py" in config["functions"]
     assert config["functions"]["api/index.py"]["maxDuration"] >= 120  # a full refresh takes about 70 s
     assert {"source": "/api/(.*)", "destination": "/api/index"} in config["rewrites"]
+    # Data is pulled only when someone clicks Data refresh: no scheduled jobs
+    assert "crons" not in config
     paths = {route.path for route in main.app.routes if isinstance(route, APIRoute)}
-    for cron in config["crons"]:
-        assert cron["path"].startswith("/api/") and cron["path"][len("/api"):] in paths
+    assert "/pipeline/refresh" in paths and "/pipeline/cron" not in paths
 
 
 def test_the_function_bundle_keeps_the_data_it_reads():

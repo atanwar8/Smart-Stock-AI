@@ -12,7 +12,6 @@
     }
   },
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
-  "crons": [{ "path": "/api/pipeline/cron", "schedule": "0 15 * * 6" }],
   "headers": [
     {
       "source": "/_next/static/(.*)",

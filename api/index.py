@@ -6,8 +6,8 @@ exposes the FastAPI app unchanged, so the routes are exactly the ones that run l
 removes the /api prefix.
 
 Vercel sets VERCEL=1, which switches the backend to its serverless behaviour: nothing trains at startup or in
-background threads, pages read the forecasts the pipeline stored in Supabase, and a refresh (the Data refresh
-button, or the weekly cron in vercel.json) runs inside its own request. The database is Supabase Postgres, named
+background threads, pages read the forecasts the pipeline stored in Supabase, and a refresh (only when someone
+clicks Data refresh) runs inside its own request. The database is Supabase Postgres, named
 by SUPABASE_DB_URL in the Vercel project's environment variables (never committed). Locally, run the API with
 uvicorn from backend/ instead (./start.sh).
 """

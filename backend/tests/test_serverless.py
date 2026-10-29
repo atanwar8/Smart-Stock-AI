@@ -65,16 +65,6 @@ def test_commodities_without_a_stored_run_still_train(store):
         assert main.forecaster.models["Lettuce"]["type"] != "Pipeline forecast"
 
 
-def test_cron_needs_the_secret_when_one_is_set(store, monkeypatch):
-    monkeypatch.setattr(pipeline, "run_now", lambda: {"state": "succeeded"})
-    monkeypatch.setenv("CRON_SECRET", "s3cret")
-    with TestClient(main.app) as client:
-        assert client.get("/api/pipeline/cron").status_code == 401
-        assert client.get("/api/pipeline/cron", headers={"Authorization": "Bearer wrong"}).status_code == 401
-        ok = client.get("/api/pipeline/cron", headers={"Authorization": "Bearer s3cret"})
-        assert ok.status_code == 200 and ok.json()["state"] == "succeeded"
-
-
 def test_refresh_runs_inside_the_request_on_serverless(store, monkeypatch):
     monkeypatch.setattr(forecast_router, "SERVERLESS", True)
     monkeypatch.setattr(pipeline, "run_now", lambda: {"state": "succeeded", "job_id": "j"})
