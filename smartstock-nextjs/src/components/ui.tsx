@@ -367,7 +367,7 @@ export function Meter({ value, tone = 'good', label }: { value: number; tone?: T
   );
 }
 
-/** A labelled number: mono label, serif value, optional note */
+/** A labelled number: small label, display value, optional note */
 export function Stat({ label, value, note, className, night = false }: { label: ReactNode; value: ReactNode; note?: ReactNode; className?: string; night?: boolean }) {
   return (
     <div className={cx('min-w-0', className)}>

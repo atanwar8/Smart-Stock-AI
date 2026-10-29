@@ -109,6 +109,7 @@ def _design(values: np.ndarray, dates: pd.DatetimeIndex, code: int, horizons: ra
         rows["code"] = code
         if with_target:
             rows["target"] = logs[j] - rows["m4"].to_numpy()
+            rows["_target_date"] = dates[j]
         blocks.append(rows)
     if not blocks:
         return pd.DataFrame(columns=FEATURES + ["m4", "target"])
@@ -124,13 +125,14 @@ class LightGBMGlobal(Forecaster):
         super().__init__()
         self.horizon = horizon
         self._boosters: Dict = {}
+        self._designs: Dict = {}   # id(series) -> (series, its full training design), see _train
         self._panel_ref = None
 
     # A fitted booster is a pure function of (panel, cutoff date): cache it for the session
     def _booster_for(self, source, panel: Dict, cutoff: pd.Timestamp):
         """source is the caller's panel object: same object (and cutoff) -> same booster."""
         if source is None or source is not self._panel_ref:
-            self._boosters, self._panel_ref = {}, source
+            self._boosters, self._designs, self._panel_ref = {}, {}, source
         if cutoff not in self._boosters:
             self._boosters[cutoff] = self._train(panel, cutoff)
         return self._boosters[cutoff]
@@ -138,17 +140,32 @@ class LightGBMGlobal(Forecaster):
     def _codes(self, panel: Dict) -> Dict[str, int]:
         return {name: i for i, name in enumerate(sorted(panel))}
 
+    def _full_design(self, series, code: int) -> pd.DataFrame:
+        """Every (origin, horizon) training row the whole series can give, built once and reused by every refit.
+
+        Row (t, h) only reads weeks <= t (rolling windows look back; last year's centred mean is read at t+h-52
+        and t-52, at most week t-44 for h <= MAX_HORIZON = 8), so it is identical whether built from the whole series or from
+        the series cut at any date >= its target week. _train therefore keeps the rows whose target week is on or
+        before the cutoff instead of rebuilding features per refit, which was ~60% of a backtest's CPU time.
+        Filtering keeps the h-major, t-ascending row order, so the boosters (and their bagging) are unchanged.
+        """
+        cached = self._designs.get(id(series))
+        if cached is None or cached[0] is not series:
+            values = series.y.to_numpy()
+            frame = _design(values, series.y.index, code, range(1, self.horizon + 1),
+                            np.arange(MIN_ORIGIN, max(len(values) - 1, MIN_ORIGIN)), series.observed, with_target=True)
+            cached = self._designs[id(series)] = (series, frame)
+        return cached[1]
+
     def _train(self, panel: Dict, cutoff: pd.Timestamp):
         codes = self._codes(panel)
         frames = []
         for name, series in panel.items():
-            keep = series.y.index <= cutoff                      # nothing after the cutoff, ever
-            values, observed = series.y.to_numpy()[keep], series.observed[keep]
-            if len(values) < MIN_ORIGIN + 2:
+            if int((series.y.index <= cutoff).sum()) < MIN_ORIGIN + 2:   # nothing after the cutoff, ever
                 continue
-            origins = np.arange(MIN_ORIGIN, len(values) - 1)
-            frames.append(_design(values, series.y.index[keep], codes[name], range(1, self.horizon + 1),
-                                  origins, observed, with_target=True))
+            full = self._full_design(series, codes[name])
+            if len(full):
+                frames.append(full[full["_target_date"] <= cutoff])
         data = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         if len(data) < 200:
             return None
@@ -199,12 +216,29 @@ class LightGBMGlobal(Forecaster):
         full, name = self._with_self(panel, y, commodity)
         code = self._codes(full).get(name, -1)
         anchor = max(series.y.index[-1] for series in full.values())
+        values = y.to_numpy(float)
+        origins = np.asarray(origins, int)
         points = np.full((len(origins), h), np.nan)
+        # Features for every origin in one pass: row (t, step) reads weeks <= t only (see _full_design), so this
+        # equals building them from y[:t + 1] per origin, which was most of a backtest's CPU time.
+        rows = _design(values, y.index, code, range(1, h + 1), origins, with_target=False)
+        m4 = rows["m4"].to_numpy(float).reshape(h, len(origins)).T          # (origin, step)
+        X = rows[FEATURES].to_numpy(float)
+        if engine() != "lightgbm":
+            X[:, FEATURES.index("code")] = np.maximum(X[:, FEATURES.index("code")], 0)
+        X = X.reshape(h, len(origins), len(FEATURES)).transpose(1, 0, 2)    # (origin, step, feature)
+        by_refit: Dict[pd.Timestamp, List[int]] = {}
         for row, origin in enumerate(origins):
-            origin_date = y.index[origin]
             # Latest refit date on the schedule that is not after this origin
-            weeks_back = int(np.ceil(((anchor - origin_date).days / 7) / REFIT_EVERY)) * REFIT_EVERY
-            refit = anchor - pd.Timedelta(days=7 * weeks_back)
+            weeks_back = int(np.ceil(((anchor - y.index[origin]).days / 7) / REFIT_EVERY)) * REFIT_EVERY
+            by_refit.setdefault(anchor - pd.Timedelta(days=7 * weeks_back), []).append(row)
+        for refit, members in by_refit.items():
             booster = self._booster_for(panel if full is panel else full, full, refit)
-            points[row] = self._forecast_from(booster, y.to_numpy(float)[:origin + 1], y.index[:origin + 1], code, h)
+            for row in members:
+                if booster is None or not np.all(np.isfinite(m4[row])):   # same fallback as _forecast_from
+                    points[row] = np.exp(np.log(values[max(0, origins[row] - 3):origins[row] + 1]).mean())
+            good = [r for r in members if booster is not None and np.all(np.isfinite(m4[r]))]
+            if good:
+                pred = booster.predict(X[good].reshape(-1, len(FEATURES))).reshape(len(good), h)
+                points[good] = np.exp(m4[good] + pred)
         return points, None

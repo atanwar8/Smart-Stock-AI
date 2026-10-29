@@ -20,7 +20,7 @@ Rolling-origin evaluation, the standard for time series:
 
 1. **Hold-out:** the newest 8 weeks (`TEST_WEEKS`). Nothing about them is used to fit, tune, weight or calibrate.
 2. **Origins:** at every week from the first one with a year of history, the model is refit on the weeks up to that
-   origin only (expanding window) and forecasts 26 weeks ahead. Tests check that no forecast can see a later week
+   origin only (expanding window) and forecasts 8 weeks ahead (`MAX_HORIZON`, the studio's limit). Tests check that no forecast can see a later week
    (`tests/test_ml_models.py`).
 3. **Metrics** on the hold-out forecasts (h ≤ 8):
    - **MAE**: average miss in dollars per unit.
@@ -50,45 +50,50 @@ The two naive rules are there so every claim of skill has an honest reference.
 the 80% range at horizon h is the forecast × exp(±q), where q is the 80th percentile of that model's past absolute
 log errors at the same h. In logs, the range scales with the price.
 
+**Trained in the backend.** The pipeline does all fitting and testing (at startup when no current results exist, and
+after every refresh): about 25 CPU-seconds for 11 vegetables × 6 models, roughly 3 minutes on Render's 0.15 CPU.
+It stores each model's scores, calibration and 8-week forecast. The studio only reads them, so a sample costs
+milliseconds; there is no per-click training and no history-window option (models always use every stored week).
+
 **Pace slider.** A what-if, not a model: the path and its range drift linearly to (1 + pace/100) × by the last week.
 
-## Measured results (stored pipeline run, 28 Oct 2026 data: 2023-07-28 to 2025-07-25)
+## Measured results (pipeline run of 29 Oct 2026, 8-week horizon; data 2023-07-28 to 2025-07-25)
 
 Hold-out = each vegetable's newest 8 weeks. Lower MASE is better; skill is against "same week last year".
 
 | Model | Mean MASE | Median MASE | Mean MAPE | Mean skill | Mean 80% coverage | Vegetables won |
 | --- | --- | --- | --- | --- | --- | --- |
-| LightGBM | **1.248** | 1.197 | **17.6%** | **+4.0%** | 0.72 | 3 |
-| Naive (last week) | 1.251 | 1.074 | 18.0% | −2.9% | 0.82 | 4 |
-| Ensemble | 1.303 | 1.240 | 18.2% | +0.3% | 0.67 | 1 |
+| LightGBM | **1.242** | 1.207 | **17.6%** | **+4.4%** | 0.68 | 1 |
+| Naive (last week) | 1.251 | 1.074 | 18.0% | −2.9% | 0.82 | 5 |
+| Ensemble | 1.295 | 1.234 | 18.1% | +0.5% | 0.67 | 0 |
 | Theta | 1.358 | 1.290 | 18.8% | −6.6% | 0.65 | 0 |
-| ETS | 1.405 | 1.319 | 19.4% | −9.5% | 0.61 | 1 |
+| ETS | 1.405 | 1.319 | 19.4% | −9.5% | 0.61 | 3 |
 | Seasonal naive | 1.409 | 1.078 | 20.9% | 0 | 0.69 | 2 |
 
 | Vegetable | Ensemble | LightGBM | ETS | Theta | Seasonal naive | Naive | Champion |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Asparagus | 1.246 | 1.368 | 1.785 | 1.788 | **0.885** | 1.797 | seasonal naive |
-| Broccoli | 1.048 | **0.892** | 1.144 | 1.126 | 0.915 | 1.109 | LightGBM |
-| Cabbage | 1.212 | **1.203** | 1.212 | 1.289 | 2.297 | 1.762 | LightGBM |
-| Carrots | 1.353 | 0.866 | 1.693 | 1.471 | 1.337 | **0.548** | naive |
-| Cauliflower | 1.294 | 1.287 | 1.324 | 1.307 | **0.795** | 1.707 | seasonal naive |
-| Cucumbers | 2.339 | **2.217** | 2.247 | 2.249 | 2.553 | 2.222 | LightGBM |
-| Lettuce | 1.240 | 1.197 | 1.319 | 1.290 | 1.276 | **1.074** | naive |
-| Onions (Green) | 0.868 | 0.868 | 0.884 | 0.852 | 0.892 | **0.779** | naive |
-| Peppers (Bell Type) | 0.896 | 0.972 | **0.853** | 0.891 | 1.078 | 0.871 | ETS |
-| Sweet Potatoes | 2.149 | 2.162 | 2.309 | 1.984 | 2.488 | **0.908** | naive |
-| Tomatoes | **0.686** | 0.692 | 0.688 | 0.688 | 0.988 | 0.983 | ensemble |
+| Asparagus | 1.234 | 1.334 | 1.785 | 1.788 | **0.885** | 1.797 | seasonal naive |
+| Broccoli | 1.036 | **0.855** | 1.144 | 1.126 | 0.915 | 1.109 | LightGBM |
+| Cabbage | 1.220 | 1.222 | **1.212** | 1.289 | 2.297 | 1.762 | ETS |
+| Carrots | 1.398 | 0.973 | 1.693 | 1.471 | 1.337 | **0.548** | naive |
+| Cauliflower | 1.288 | 1.274 | 1.324 | 1.307 | **0.795** | 1.707 | seasonal naive |
+| Cucumbers | 2.251 | 2.266 | 2.247 | 2.249 | 2.553 | **2.222** | naive |
+| Lettuce | 1.268 | 1.207 | 1.319 | 1.290 | 1.276 | **1.074** | naive |
+| Onions (Green) | 0.871 | 0.876 | 0.884 | 0.852 | 0.892 | **0.779** | naive |
+| Peppers (Bell Type) | 0.884 | 0.936 | **0.853** | 0.891 | 1.078 | 0.871 | ETS |
+| Sweet Potatoes | 2.099 | 2.010 | 2.309 | 1.984 | 2.488 | **0.908** | naive |
+| Tomatoes | 0.696 | 0.712 | **0.688** | 0.688 | 0.988 | 0.983 | ETS |
 
 ### What the numbers say
 
 - **Weekly retail prices are close to a random walk.** Every model's mean MASE is above 1, and "same as last week"
-  wins 4 of 11 vegetables. Promotions move a price 20–30% for a single week and then reverse; no model here sees
+  wins 5 of 11 vegetables. Promotions move a price 20–30% for a single week and then reverse; no model here sees
   promotions coming.
 - **LightGBM is the best single model on average**, slightly ahead of naive on mean MASE and MAPE, and the only model
-  with positive average skill. Pooling all vegetables is what makes it competitive.
+  with clearly positive average skill. (Training it on 1–8 weeks ahead instead of 1–26 made it slightly more accurate.) Pooling all vegetables is what makes it competitive.
 - **The 8-week hold-out is small** (about 36 scored forecasts per vegetable), so one vegetable's ranking can flip with
   a few more weeks of data. Read the per-vegetable champions as indicative.
-- **Ranges are too narrow on recent weeks**: 61–72% of real prices fell inside the "80%" ranges (naive: 82%). The most
+- **Ranges are too narrow on recent weeks**: 61–69% of real prices fell inside the "80%" ranges (naive: 82%). The most
   recent weeks were more volatile than the calibration period. Treat the range as a lower bound on uncertainty.
 
 ### Recommendation
@@ -112,7 +117,7 @@ registered in `ml/models/__init__.py`; the backtest, leaderboard and studio pick
 
 | | |
 | --- | --- |
-| Intended use | Weekly retail price outlook (1–26 weeks) for menu costing and order timing in a restaurant kitchen |
+| Intended use | Weekly retail price outlook (next week by default, up to 8 weeks) for menu costing and order timing in a restaurant kitchen |
 | Not for | Wholesale or futures pricing, regions other than the modelled one, single-day decisions |
 | Training data | USDA report 3324, Midwest, 11 vegetables, weekly; expanding window from 2023-07-28 |
 | Evaluation | Rolling origin, newest 8 weeks held out, MASE/MAE/MAPE/skill/coverage (above) |

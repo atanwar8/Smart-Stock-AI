@@ -135,13 +135,13 @@ export interface ActiveResponse {
 
 // ---------- knobs (bounds from SPEC §5) ----------
 
-export const HORIZON = { min: 1, max: 26, ticks: [4, 8, 13, 26] } as const;
+// Weeks ahead: next week by default, two months at most (backend limit, routers/forecast.py)
+export const HORIZON = { min: 1, max: 8, ticks: [1, 2, 4, 8] } as const;
 export const CONFIDENCE = { min: 50, max: 95, step: 5 } as const;
-/** History snaps in years; null = all stored weeks */
-export const HISTORY_SNAPS: readonly (number | null)[] = [1, 2, 3, 5, null];
 export const PACE = { min: -40, max: 60 } as const;
 
-export const DEFAULT_PARAMS: PreviewParams = { horizon_weeks: 8, confidence: 0.8, history_years: 2, pace_pct: 0 };
+// history_years is always null: models learn from every stored week (the backend trains them ahead of time)
+export const DEFAULT_PARAMS: PreviewParams = { horizon_weeks: 1, confidence: 0.8, history_years: null, pace_pct: 0 };
 
 // ---------- transport ----------
 

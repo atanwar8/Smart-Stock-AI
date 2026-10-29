@@ -85,9 +85,29 @@ def test_errors_use_the_contract_status_codes(client):
     assert preview(client, commodity="Dragonfruit").status_code == 404
     assert preview(client, model="prophet").status_code == 422
     assert preview(client, model="timesfm").status_code == 422   # removed model: unknown like any other
-    assert preview(client, horizon_weeks=27).status_code == 422
+    assert preview(client, horizon_weeks=9).status_code == 422   # two months at most
     assert preview(client, confidence=0.99).status_code == 422
     assert preview(client, pace_pct=-50).status_code == 422
+
+
+def test_default_sample_is_next_week_from_all_stored_weeks(client):
+    body = client.post("/api/forecast/preview", json={"commodity": "Tomatoes", "model": "ets"}).json()
+    assert body["params"]["horizon_weeks"] == 1 and len(body["forecast"]) == 1
+    assert body["params"]["history_years"] is None
+    assert body["train_window"]["start"] == "2023-07-28"   # every stored week, whatever an old client asks for
+
+
+def test_previews_wait_for_backend_training_instead_of_training_themselves(client):
+    service._memo.clear()
+    service.TRAINING.set()
+    try:
+        response = preview(client, model="theta")
+        assert response.status_code == 503 and "being trained" in response.json()["detail"]
+        board = client.get("/api/forecast/leaderboard", params={"commodity": "Lettuce"})
+        assert board.status_code == 503   # never an empty, cached leaderboard while training
+    finally:
+        service.TRAINING.clear()
+    assert preview(client, model="theta").status_code == 200
 
 
 def test_comma_and_parenthesis_spellings_are_the_same_vegetable(client):

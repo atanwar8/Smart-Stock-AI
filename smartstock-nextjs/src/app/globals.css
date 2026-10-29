@@ -2,11 +2,11 @@
 
 /* Fonts come from next/font in layout.tsx as CSS variables, so these resolve per element ("inline") */
 @theme inline {
-  /* UI text: Apple's system face where it exists, Inter everywhere else */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", var(--font-inter), "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
-  /* Redesign contract (SPEC §3): serif for big numbers and headlines, mono for micro-labels */
-  --font-display: var(--font-instrument), "New York", ui-serif, Georgia, serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  /* One face for everything: Urbanist, as before the redesign. The display and mono tokens keep their names
+     (SPEC §3) so headline and micro-label styles still apply sizes, spacing and case; only the face is shared. */
+  --font-sans: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 @theme {
@@ -69,8 +69,12 @@ body {
     radial-gradient(900px 480px at 96% -14%, rgb(91 91 214 / 0.06) 0%, transparent 60%);
   background-repeat: no-repeat;
   color: var(--color-ink);
-  font-family: var(--font-sans);
+  /* Not var(--font-sans): "@theme inline" values are copied into utilities, never emitted as CSS variables,
+     so that var() was undefined here and the page fell back to the system font. --font-urbanist comes from
+     next/font's class on <body> (layout.tsx). */
+  font-family: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px;
+  font-weight: 500;   /* Urbanist reads best at medium, as the pre-redesign dashboard set it */
   line-height: 1.45;
   letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
@@ -82,14 +86,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Serif display numbers use lining figures */
+/* Display numbers use lining figures */
 .font-display {
   font-feature-settings: "lnum" 1;
 }
 
-/* Small mono labels: the almanac's marginal notes */
+/* Small uppercase labels: the almanac's marginal notes */
 .micro {
-  font-family: var(--font-mono);
+  font-family: var(--font-urbanist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.08em;

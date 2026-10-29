@@ -6,6 +6,7 @@ import pytest
 
 from ml import intervals
 from ml.backtest import evaluate, make_plan
+from ml.config import MAX_HORIZON
 from ml.models import create
 from ml.models.gbm import LightGBMGlobal
 from ml.series import WeeklySeries
@@ -29,8 +30,8 @@ def panel():
 @pytest.mark.parametrize("model_id", ["naive", "seasonal_naive", "ets", "theta", "lightgbm"])
 def test_every_model_forecasts_positive_prices(model_id, panel):
     series = panel["Tomatoes"]
-    frame = create(model_id).fit(series.y, panel, "Tomatoes").predict(26)
-    assert len(frame) == 26 and (frame["yhat"] > 0).all()
+    frame = create(model_id).fit(series.y, panel, "Tomatoes").predict(MAX_HORIZON)
+    assert len(frame) == MAX_HORIZON and (frame["yhat"] > 0).all()
     assert frame.index[0] == series.dates[-1] + pd.Timedelta(days=7)
 
 

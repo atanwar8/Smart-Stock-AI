@@ -148,7 +148,9 @@ Request:
 { "commodity": "Tomatoes", "model": "lightgbm", "horizon_weeks": 8, "confidence": 0.8,
   "history_years": 2, "pace_pct": 0 }
 ```
-Bounds: `horizon_weeks` 1–26, `confidence` 0.5–0.95, `history_years` 1–15 or `null` = everything stored,
+Bounds (since 2026-10-29): `horizon_weeks` 1–8 (default 1), `confidence` 0.5–0.95; `history_years` is no longer
+accepted (ignored if sent): models always learn from every stored week and are trained ahead of time by the pipeline,
+so a preview only reads stored results (503 with a "being trained" detail while the pipeline is training).
 `pace_pct` −40…+60 (scenario: forecast drifts linearly to `(1+pace_pct/100)×` by the last week).
 Response (also persisted as a `forecasts` row with `status='preview'`):
 ```json

@@ -4,13 +4,14 @@ Where every number comes from:
   * prices      - the training store (store.get_store()), one region (ml.config.SERIES_REGION), as weekly series
   * backtest    - ml.backtest.evaluate(): rolling-origin forecasts on the stored weeks, hold-out = newest TEST_WEEKS
   * intervals   - split-conformal widths from the same backtest
-  * forecast    - the model refit on every stored week in the chosen history window, TIMES the pace scenario
+  * forecast    - the model fit on every stored week, TIMES the pace scenario
 
-Caching: everything expensive is a pure function of (data version, commodity, model, history window), so it is
-memoized under that key and dropped when the data version changes (a refresh, a new training batch). Moving the
-horizon, confidence or pace sliders only re-slices and re-scales a cached 26-week path, which is instant. The
-pipeline's stored training runs already hold the backtest and calibration for the full window, so the default
-preview of a model the pipeline has scored only needs one final fit.
+Trained in the backend, read at click time: the pipeline (ml.pipeline.train_and_test, at startup and after every
+refresh) backtests every model on all stored weeks AND stores each model's 8-week forecast path in its training
+run. A preview only reads that run and rescales the stored path for the chosen horizon, confidence and pace, so
+no model is fit or tested while the chef waits. Only when no stored run matches the data (tests, or training
+switched off) does the service fit on demand; while the pipeline is training it answers 503 instead, rather
+than competing with the training for the server's CPU.
 """
 
 import threading
@@ -23,17 +24,22 @@ import numpy as np
 import pandas as pd
 
 from ml import intervals
-from ml.backtest import ModelEval, evaluate
+from ml.backtest import STORE_VERSION, ModelEval, evaluate
 from ml.config import DEFAULT_CONFIDENCE, MAX_HORIZON, SERIES_REGION, TEST_WEEKS
 from ml.models import MODELS, ORDER, Ensemble, create
+from ml.models.base import future_index
 from ml.models.gbm import LightGBMGlobal
-from ml.series import WeeklySeries, _key, build_panel, truncate_panel
+from ml.series import WeeklySeries, _key, build_panel
 from store import Conflict, NotFound, get_store  # noqa: F401  (re-exported for the router)
 
 DEFAULT_MODEL = "ensemble"
 # Models the studio offers. "naive" stays a backtest baseline only (it is the MASE denominator's idea already).
 STUDIO_MODELS = [m for m in ORDER if m != "naive"]
 LIVE_MODELS = ["naive", "seasonal_naive", "ets", "theta", "lightgbm", "ensemble"]
+# Set by ml.pipeline while it trains; previews then wait for its results instead of training a second copy
+TRAINING = threading.Event()
+TRAINING_MESSAGE = ("The models are being trained on the newest data. Samples will be ready in a few minutes "
+                    "(Data refresh shows the progress).")
 
 
 class StudioError(Exception):
@@ -114,10 +120,29 @@ def resolve_commodity(name: str) -> str:
     raise StudioError(404, f"No forecastable price history for {name!r}. Known: {', '.join(sorted(names)) or 'none'}.")
 
 
-def _gbm(years_key) -> LightGBMGlobal:
-    """One LightGBM per (data version, history window): its boosters are global (every vegetable), so sharing the
-    instance lets every commodity reuse the same fits instead of refitting the whole panel per request."""
-    return _memo.get(_version(), ("gbm", years_key), LightGBMGlobal)
+def _gbm() -> LightGBMGlobal:
+    """One LightGBM per data version: its boosters are global (every vegetable), so sharing the instance lets every
+    commodity reuse the same fits instead of refitting the whole panel per request."""
+    return _memo.get(_version(), ("gbm",), LightGBMGlobal)
+
+
+def forecast_path(model_id: str, series: WeeklySeries, panel_: Dict, weights: Optional[Dict] = None,
+                  gbm: Optional[LightGBMGlobal] = None) -> np.ndarray:
+    """MAX_HORIZON weekly prices after the series' last week, from the model fit on every stored week.
+
+    The pipeline calls this once per (vegetable, model) and stores the result; the service only falls back to it.
+    The ensemble uses the member weights its backtest chose; LightGBM reuses the shared booster.
+    """
+    gbm = gbm or LightGBMGlobal()
+    if model_id == "ensemble":
+        weights = weights or {"ets": 0.5, "theta": 0.5}
+        model = Ensemble(weights=weights, members={"lightgbm": gbm} if "lightgbm" in weights else {})
+    elif model_id == "lightgbm":
+        model = gbm
+    else:
+        model = create(model_id)
+    frame = model.fit(series.y, panel_, series.commodity).predict(MAX_HORIZON)
+    return np.maximum(frame["yhat"].to_numpy(float), 1e-6)
 
 
 # ---------------------------------------------------------------------------------------------- models
@@ -156,6 +181,7 @@ class Evaluation:
     window: Dict = field(default_factory=dict)  # train/test dates
     training_run_id: Optional[int] = None
     created_at: Optional[str] = None
+    future: Optional[List[float]] = None       # the stored MAX_HORIZON-week forecast path (pipeline runs only)
 
     @classmethod
     def from_eval(cls, ev: ModelEval) -> "Evaluation":
@@ -173,62 +199,51 @@ class Evaluation:
                    backtest=list(params.get("backtest") or []), test_levels=list(params.get("test_levels") or []),
                    calib_test=table("calib_test"), calib_full=table("calib_full"), weights=params.get("weights"),
                    window={k: run.get(k) for k in ("train_start", "train_end", "test_start", "test_end")},
-                   training_run_id=run.get("id"), created_at=run.get("created_at"))
-
-
-def _window(series: WeeklySeries, history_years: Optional[float]) -> Tuple[WeeklySeries, Optional[float]]:
-    """The series cut to the history window, and the cache key for it (None when the window is everything stored)."""
-    cut = series.last_years(history_years)
-    return cut, (None if len(cut) == len(series) else float(history_years))
+                   training_run_id=run.get("id"), created_at=run.get("created_at"), future=params.get("future"))
 
 
 def _current_runs(commodity: str, last_date: str) -> Dict[str, Dict]:
-    """The commodity's newest pipeline training runs, if they were scored on the data stored now."""
+    """The commodity's newest pipeline training runs, if they were scored on the data stored now (and written by a
+    pipeline that stores forecast paths: older runs are ignored and retrained, see backtest.STORE_VERSION)."""
     def load():
         runs = get_store().latest_training_runs(commodity)
         return {model: run for model, run in runs.get(commodity, {}).items()
-                if run.get("test_end") == last_date and (run.get("params") or {}).get("history_years") is None}
+                if run.get("test_end") == last_date and (run.get("params") or {}).get("version", 1) >= STORE_VERSION}
     return _memo.get(_version(), ("runs", commodity), load)
 
 
-def evaluation(commodity: str, model_id: str, history_years: Optional[float] = None) -> Evaluation:
+def evaluation(commodity: str, model_id: str) -> Evaluation:
     series = panel()[commodity]
-    cut, years_key = _window(series, history_years)
 
     def compute():
-        if years_key is None:
-            run = _current_runs(commodity, series.dates[-1].date().isoformat()).get(model_id)
-            if run is not None and run.get("metrics"):
-                return Evaluation.from_run(run)
-        sub_panel = panel() if years_key is None else truncate_panel(panel(), cut.dates[-1], years_key)
+        run = _current_runs(commodity, series.dates[-1].date().isoformat()).get(model_id)
+        if run is not None and run.get("metrics"):
+            return Evaluation.from_run(run)
+        if TRAINING.is_set():
+            raise StudioError(503, TRAINING_MESSAGE)
         try:
-            evals = evaluate(cut, [model_id], panel=sub_panel, models={"lightgbm": _gbm(years_key)})
+            evals = evaluate(series, [model_id], panel=panel(), models={"lightgbm": _gbm()})
         except ValueError as exc:   # too few weeks for a hold-out
-            raise StudioError(422, f"{commodity}: {exc} Try a longer history window.")
+            raise StudioError(422, f"{commodity}: {exc}")
         return Evaluation.from_eval(evals[model_id])
 
-    return _memo.get(_version(), ("eval", commodity, model_id, years_key), compute)
+    return _memo.get(_version(), ("eval", commodity, model_id), compute)
 
 
-def future_path(commodity: str, model_id: str, history_years: Optional[float] = None) -> Tuple[pd.DatetimeIndex, np.ndarray]:
-    """(dates, yhat) for MAX_HORIZON weeks after the last stored week, from a fit on the history window."""
+def future_path(commodity: str, model_id: str) -> Tuple[pd.DatetimeIndex, np.ndarray]:
+    """(dates, yhat) for MAX_HORIZON weeks after the last stored week: the stored path when the pipeline wrote one."""
     series = panel()[commodity]
-    cut, years_key = _window(series, history_years)
+    dates = future_index(series.dates[-1], MAX_HORIZON)
 
     def compute():
-        sub_panel = panel() if years_key is None else truncate_panel(panel(), cut.dates[-1], years_key)
-        if model_id == "ensemble":
-            weights = evaluation(commodity, "ensemble", history_years).weights or {"ets": 0.5, "theta": 0.5}
-            members = {"lightgbm": _gbm(years_key)} if "lightgbm" in weights else {}
-            model = Ensemble(weights=weights, members=members)
-        elif model_id == "lightgbm":
-            model = _gbm(years_key)
-        else:
-            model = create(model_id)
-        frame = model.fit(cut.y, sub_panel, commodity).predict(MAX_HORIZON)
-        return frame.index, np.maximum(frame["yhat"].to_numpy(float), 1e-6)
+        ev = evaluation(commodity, model_id)
+        if ev.future and len(ev.future) >= MAX_HORIZON:
+            return dates, np.asarray(ev.future[:MAX_HORIZON], float)
+        if TRAINING.is_set():
+            raise StudioError(503, TRAINING_MESSAGE)
+        return dates, forecast_path(model_id, series, panel(), ev.weights, _gbm())
 
-    return _memo.get(_version(), ("path", commodity, model_id, years_key), compute)
+    return _memo.get(_version(), ("path", commodity, model_id), compute)
 
 
 # ---------------------------------------------------------------------------------------------- leaderboard
@@ -250,7 +265,9 @@ def leaderboard(commodity: str) -> Dict:
         for model_id in STUDIO_MODELS:
             try:
                 evals[model_id] = evaluation(commodity, model_id)
-            except StudioError:
+            except StudioError as exc:
+                if exc.status == 503:   # training in the backend: say so, rather than cache an empty board
+                    raise
                 continue
         rows = [_row(m, e.metrics) for m, e in evals.items() if e.metrics]
         ranked = sorted(rows, key=lambda r: (r["mase"] is None, r["mase"] or 0, r["mae"] or 0))
@@ -305,16 +322,17 @@ def _r(value) -> Optional[float]:
     return None if value is None or not np.isfinite(value) else round(float(value), 4)
 
 
-def preview(commodity: str, model_id: str, horizon_weeks: int = 8, confidence: float = DEFAULT_CONFIDENCE,
-            history_years: Optional[float] = 2, pace_pct: float = 0.0) -> Dict:
+def preview(commodity: str, model_id: str, horizon_weeks: int = 1, confidence: float = DEFAULT_CONFIDENCE,
+            pace_pct: float = 0.0) -> Dict:
     """One sample forecast, stored as a 'preview' row so it can be applied later."""
     started = time.perf_counter()
     commodity = resolve_commodity(commodity)
     _require_model(model_id)
     series = panel()[commodity]
-    cut, _ = _window(series, history_years)
-    ev = evaluation(commodity, model_id, history_years)
-    dates, path = future_path(commodity, model_id, history_years)
+    cut = series   # models always learn from every stored week
+    ev = evaluation(commodity, model_id)
+    dates, path = future_path(commodity, model_id)
+    horizon_weeks = int(min(max(horizon_weeks, 1), MAX_HORIZON))
 
     yhat = path[:horizon_weeks]
     lo, hi = _bounds(yhat, ev.calib_full, confidence)
@@ -340,11 +358,12 @@ def preview(commodity: str, model_id: str, horizon_weeks: int = 8, confidence: f
                "coverage": _r(coverage if coverage is not None else ev.metrics.get("coverage")),
                "skill": _r(ev.metrics.get("skill"))}
     summary = _summary(commodity, series.unit, float(observed.iloc[-4:].mean()), yhat, lo, hi, confidence, pace_pct)
-    params = {"horizon_weeks": horizon_weeks, "confidence": confidence, "history_years": history_years, "pace_pct": pace_pct}
+    # history_years stays in the response (always null = every stored week) for clients built on SPEC §5
+    params = {"horizon_weeks": horizon_weeks, "confidence": confidence, "history_years": None, "pace_pct": pace_pct}
 
     preview_id = get_store().insert_forecast({
         "commodity": commodity, "unit": series.unit, "model": model_id, "horizon_weeks": horizon_weeks,
-        "confidence": confidence, "history_years": history_years, "pace_pct": pace_pct, "status": "preview",
+        "confidence": confidence, "history_years": None, "pace_pct": pace_pct, "status": "preview",
         "training_run_id": None, "points": forecast, "metrics": metrics, "summary": summary})
     return {"preview_id": preview_id, "commodity": commodity, "unit": series.unit, "model": model_id,
             "model_name": MODELS[model_id].name, "mode": "live", "params": params, "history": history,

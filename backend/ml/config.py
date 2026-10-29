@@ -11,7 +11,9 @@ def _int(name: str, default: int) -> int:
 
 
 TEST_WEEKS = _int("TEST_WEEKS", 8)          # newest weeks held out for the leaderboard
-MAX_HORIZON = 26                            # longest forecast the API serves (and the residuals we calibrate)
+# Longest forecast the studio serves, and the horizon every model is trained, backtested and calibrated on.
+# Weekly retail prices are close to a random walk, so accuracy fades fast: 1 week is the default, 8 the limit.
+MAX_HORIZON = 8
 SEASON = 52                                 # weeks per seasonal cycle
 MIN_CONTEXT = 52                            # first backtest origin needs a full year (seasonal naive, last-year features)
 MIN_WEEKS = 30                              # a commodity with fewer stored weeks is not modelled at all
