@@ -58,7 +58,12 @@ function Metric({ icon: Icon, children, title }: { icon: typeof Target; children
 }
 
 function AnswerPanel({ preview, applied, loading, className }: AnswerPanelProps) {
-  const last = preview?.history[preview.history.length - 1]?.price ?? preview?.backtest[preview.backtest.length - 1]?.actual;
+  // Measured from the last 4 real weeks' average, the same basis as the backend's summary sentence
+  // (ml/service.py _summary): one promo-spike week would otherwise turn a flat outlook into "-21%".
+  const recentWeeks = (preview?.history ?? []).slice(-4).map((h) => h.price).filter(finite);
+  const last = recentWeeks.length
+    ? recentWeeks.reduce((sum, price) => sum + price, 0) / recentWeeks.length
+    : preview?.backtest[preview.backtest.length - 1]?.actual;
   const end = preview?.forecast[preview.forecast.length - 1];
   const change = finite(last) && end && last > 0 ? ((end.yhat - last) / last) * 100 : 0;
   const shown = useTicker(Math.round(change));

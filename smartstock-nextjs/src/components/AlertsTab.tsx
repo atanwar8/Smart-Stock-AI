@@ -1,15 +1,17 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertOctagon, ArrowUpRight, BellOff, CheckCircle2, EyeOff, Info, RefreshCw, Server, TrendingDown, TrendingUp, Undo2, type LucideIcon } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertOctagon, ArrowUpRight, BellOff, CheckCircle2, ChevronDown, EyeOff, RefreshCw, Server, TrendingDown, TrendingUp, Undo2, type LucideIcon } from 'lucide-react';
 import { useCommodityActions, useCommodityState } from '../contexts/CommodityContext';
 import { postJSON, qs, useApi } from '@/lib/api';
 import { MUTED_EVENT, readMuted, writeMuted, isMuted, type MutedAlerts } from '@/lib/alertPrefs';
 import { isTypingTarget } from '@/lib/hooks';
 import { goToTab } from '@/lib/tabs';
 import type { AlertItem, AlertSettings, TrendChart } from '@/lib/types';
+import { usualBand, usualWeeklyMove } from '@/lib/usual';
+import { verb } from '@/lib/words';
 import { AreaLine, type RangePoint, type SeriesPoint } from './charts';
-import ProduceIcon from './produce/ProduceIcon';
+import ProduceIcon, { produceMeta } from './produce/ProduceIcon';
 import { Button, Card, CardHeader, Empty, ErrorNote, Field, Kbd, PageHeader, Segmented, Skeleton, Switch, cx } from './ui';
 
 type Filter = 'all' | 'stock' | 'price' | 'system';
@@ -47,6 +49,44 @@ const why = (kind: Kind, s: AlertSettings) => {
   }
 };
 
+const num = (n: number) => (Math.abs(n) >= 10 ? n.toFixed(0) : n.toFixed(1));
+
+// The alert in one sentence, Atisbo-style: the fact plus how far it is from the chef's own rule
+// ("forecast to rise 6.2% next week, 3.1x your 2% rule"). Falls back to the API's message.
+const headline = (a: AlertItem, kind: Kind, s: AlertSettings): string => {
+  if (!a.commodity) return `${a.message}.`;
+  const label = produceMeta(a.commodity).label || a.commodity;
+  const be = verb(label, 'are', 'is');
+  if (kind === 'stock') {
+    const m = a.message.match(/run out in ([\d.]+) days/);
+    if (!m) return `${a.message}.`;
+    const d = Number(m[1]);
+    if (d < 0.05) return `${label} ${be} out of stock.`;
+    const t = s.low_stock_threshold;
+    const r = t > 0 ? d / t : 1;
+    const share = r < 0.15 ? 'a fraction of' : r < 0.5 ? 'under half' : r < 0.95 ? `${Math.round(r * 100)}% of` : 'right at';
+    return `${label} will run out in ${num(d)} ${d === 1 ? 'day' : 'days'}, ${share} the ${t}-day cover your rule asks for.`;
+  }
+  if (kind === 'spoilage') {
+    const m = a.message.match(/lasts ([\d.]+) days but keeps about ([\d.]+)/);
+    if (!m) return `${a.message}.`;
+    const r = Number(m[1]) / Math.max(1, Number(m[2]));
+    return r >= 1.05
+      ? `${num(r)}× more ${label.toLowerCase()} on hand than will stay fresh.`
+      : `${label} ${be} close to ${verb(label, 'their', 'its')} ${m[2]}-day shelf life.`;
+  }
+  if (kind === 'rising' || kind === 'falling') {
+    const m = a.message.match(/(rise|fall) ([\d.]+)%/);
+    if (!m) return `${a.message}.`;
+    const p = Number(m[2]);
+    const r = s.price_change_alert > 0 ? p / s.price_change_alert : 0;
+    return `${label} ${be} forecast to ${m[1]} ${num(p)}% next week${r >= 1.2 ? `, ${num(r)}× your ${s.price_change_alert}% rule` : ''}.`;
+  }
+  return `${a.message}.`;
+};
+
+const PAGE = 8;
+
 const DEFAULTS: AlertSettings = {
   low_stock_threshold: 1,
   price_change_alert: 1,
@@ -60,7 +100,10 @@ const DEFAULTS: AlertSettings = {
 const DAY = 24 * 60 * 60 * 1000;
 
 export default function AlertsTab() {
-  const recent = useApi<{ alerts: AlertItem[] }>('/alerts/recent');
+  // Server-paged (most urgent first): "Show more" asks for a longer first page, so a refresh keeps
+  // everything already on screen in one consistent request
+  const [limit, setLimit] = useState(PAGE);
+  const recent = useApi<{ alerts: AlertItem[]; total?: number }>(`/alerts/recent?limit=${limit}&offset=0`);
   const saved = useApi<AlertSettings>('/alerts/settings');
   const [filter, setFilter] = useState<Filter>('all');
   const [showHidden, setShowHidden] = useState(false);
@@ -123,10 +166,16 @@ export default function AlertsTab() {
     [alerts, muted, showHidden, filter]
   );
   const urgent = alerts.filter((a) => a.type === 'critical' && !isMuted(muted, a.id)).length;
-  const visible = alerts.length - hiddenCount;
+  const total = recent.data?.total ?? alerts.length;
+  const more = Math.max(0, total - alerts.length);
+  const visible = total - hiddenCount;
 
   // J / K move through the list (the shell leaves J/K to this page), Enter opens the produce
   const [focus, setFocus] = useState(0);
+  const focusRef = useRef(0);
+  useEffect(() => {
+    focusRef.current = focus;
+  }, [focus]);
   useEffect(() => setFocus((f) => Math.min(f, Math.max(0, shown.length - 1))), [shown.length]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -135,6 +184,9 @@ export default function AlertsTab() {
       if (k === 'j' || k === 'k') {
         e.preventDefault();
         setFocus((f) => Math.max(0, Math.min(shown.length - 1, f + (k === 'j' ? 1 : -1))));
+      } else if (e.key === 'Enter' && (e.target as HTMLElement | null)?.closest?.('button, a, [role="img"]') == null) {
+        // Enter takes the focused alert's main action (unless a button or chart has keyboard focus)
+        document.querySelector<HTMLButtonElement>(`#alert-${focusRef.current} [data-primary]`)?.click();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -187,6 +239,10 @@ export default function AlertsTab() {
               <Kbd>J</Kbd>
               <Kbd>K</Kbd>
               <span>to move</span>
+              <span className="hidden items-center gap-2 sm:inline-flex">
+                <Kbd>Enter</Kbd>
+                <span>to open</span>
+              </span>
             </div>
             <div className="flex items-center gap-1">
               {hiddenCount > 0 && (
@@ -245,6 +301,13 @@ export default function AlertsTab() {
                   />
                 ))}
               </ul>
+            )}
+            {more > 0 && !recent.error && (
+              <div className="px-2 pt-2">
+                <Button variant="ghost" size="sm" icon={ChevronDown} className="w-full" loading={recent.loading} onClick={() => setLimit((l) => Math.min(100, l + PAGE))}>
+                  Show {Math.min(PAGE, more)} more of {total}
+                </Button>
+              </div>
             )}
           </div>
         </Card>
@@ -350,16 +413,16 @@ function AlertRow({
             {a.type === 'critical' && <span className="micro text-bad">Critical</span>}
             <span className="ml-auto text-[11.5px] text-faint">{a.timestamp}</span>
           </div>
-          <p className={cx('mt-1.5 leading-snug text-ink', focused ? 'font-display text-[24px]' : 'text-[15px] font-semibold')}>{a.message}.</p>
+          <p className={cx('mt-1.5 leading-snug text-ink', focused ? 'font-display text-[24px] leading-[1.15] sm:text-[26px]' : 'text-[15px] font-semibold')}>{headline(a, kind, settings)}</p>
           {focused && <p className="mt-1.5 max-w-[60ch] text-[13px] leading-relaxed text-muted">{why(kind, settings)}</p>}
         </div>
       </div>
 
       {focused && (
-        <div className="mt-3 pl-[52px]">
-          {a.commodity && (kind === 'rising' || kind === 'falling') && <PriceEvidence commodity={a.commodity} />}
+        <div className="mt-3 sm:pl-[52px]">
+          {a.commodity && (kind === 'rising' || kind === 'falling') && <PriceEvidence commodity={a.commodity} alert={a} />}
           <div className="mt-3 flex flex-wrap items-center gap-2" onClick={(e) => e.stopPropagation()}>
-            <Button size="sm" variant="primary" icon={ArrowUpRight} onClick={open}>
+            <Button size="sm" variant="primary" icon={ArrowUpRight} onClick={open} data-primary="">
               {a.commodity ? (kind === 'rising' || kind === 'falling' ? 'See forecast' : 'Plan an order') : 'Open data refresh'}
             </Button>
             {hidden ? (
@@ -383,8 +446,9 @@ function AlertRow({
   );
 }
 
-// Expected vs actual for a price alert: recent USDA weeks and the forecast with its likely range
-function PriceEvidence({ commodity }: { commodity: string }) {
+// Expected vs actual for a price alert: the usual band shaded around recent USDA weeks, the forecast
+// that fired the alert in iris, and one line comparing that move with how much prices usually move.
+function PriceEvidence({ commodity, alert }: { commodity: string; alert: AlertItem }) {
   const { selectedState, selectedZipCode } = useCommodityState();
   const trends = useApi<TrendChart>(`/30-day-trends?${qs({ commodity, state: selectedState, zip_code: selectedZipCode })}`);
   const data = useMemo(() => {
@@ -396,22 +460,48 @@ function PriceEvidence({ commodity }: { commodity: string }) {
     const lo = by('Lower Bound');
     const actual: SeriesPoint[] = a ? a.x.map((x, i) => ({ date: x.slice(0, 10), value: a.y[i] })) : [];
     const forecast: RangePoint[] = f ? f.x.map((x, i) => ({ date: x.slice(0, 10), value: f.y[i], hi: up?.y[i], lo: lo?.y[i] })) : [];
-    return { actual, forecast };
+    return { actual, forecast, band: usualBand(actual), weekly: usualWeeklyMove(actual) };
   }, [trends.data]);
 
   if (trends.error) return <p className="text-[12.5px] text-faint">The price chart didn&apos;t load ({trends.error}).</p>;
-  if (!data.actual.length) return <Skeleton className="h-[130px]" />;
+  if (!data.actual.length) return <Skeleton className="h-[160px]" />;
+
+  const m = alert.message.match(/(rise|fall) ([\d.]+)%/);
+  const move = m ? Number(m[2]) : undefined;
+  const times = move !== undefined && data.weekly ? move / data.weekly : undefined;
+
   return (
     <div className="rounded-tile border border-line bg-surface p-2">
-      <AreaLine actual={data.actual.slice(-6)} forecast={data.forecast} height={130} showYAxis={false} animKey={commodity} label={`${commodity}: recent prices and the forecast that triggered this alert.`} />
-      <div className="flex items-center gap-4 px-2 pb-1 pt-1 text-[11.5px] text-faint">
+      {times !== undefined && data.weekly !== undefined && (
+        <p className="px-2 pb-1 pt-1 text-[13px] text-muted [&_b]:font-semibold [&_b]:text-ink">
+          {times >= 1.15 ? (
+            <>
+              That&apos;s <b>{num(times)}× more than usual</b>: these prices typically move about {num(data.weekly)}% a week.
+            </>
+          ) : (
+            <>About the usual weekly move ({num(data.weekly)}%), but past your rule.</>
+          )}
+        </p>
+      )}
+      <AreaLine
+        actual={data.actual.slice(-8)}
+        expected={data.band?.expected.slice(-8)}
+        forecast={data.forecast}
+        height={150}
+        showYAxis={false}
+        animKey={commodity}
+        label={`${commodity}: recent prices inside their usual band, and the forecast that triggered this alert.`}
+      />
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 pb-1 pt-1 text-[11.5px] text-faint">
         <span className="inline-flex items-center gap-1.5">
           <span className="h-0.5 w-4 rounded-full bg-accent" /> Actual
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-0 w-4 border-t-2 border-dashed border-forecast" /> Expected
+          <span className="h-2.5 w-4 rounded-sm bg-well ring-1 ring-line" /> Usual range
         </span>
-        <Info className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-0 w-4 border-t-2 border-dashed border-forecast" /> Forecast
+        </span>
       </div>
     </div>
   );

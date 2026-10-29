@@ -48,12 +48,12 @@ function MarketPulseBase({ commodity, unit, actual, forecast, horizonLabel, load
             </span>
             <div className="leading-tight">
               <div className="text-[15px] font-semibold text-white">Market pulse</div>
-              <Micro className="text-night-ink/55">USDA retail{unit ? `, ${unit.replace(/^\//, 'per ').trim()}` : ''}</Micro>
+              <Micro className="text-night-ink/65">USDA retail{unit ? `, ${unit.replace(/^\//, 'per ').trim()}` : ''}</Micro>
             </div>
           </div>
           {change !== undefined && (
             <div className="text-right">
-              <Micro className="text-night-ink/55">{horizonLabel}</Micro>
+              <Micro className="text-night-ink/65">{horizonLabel}</Micro>
               <div className="tabular mt-1 font-display text-[26px] leading-none text-[#c4c5ff]">{money(end!)}</div>
             </div>
           )}
@@ -63,7 +63,7 @@ function MarketPulseBase({ commodity, unit, actual, forecast, horizonLabel, load
           {current !== undefined ? (
             <div className="font-display text-[64px] leading-[0.9] tracking-[-0.02em] text-white sm:text-[76px]">
               <Ticker value={current} format={(n) => money(n)} />
-              <span className="ml-1 font-sans text-[15px] font-medium tracking-normal text-night-ink/55">{unit}</span>
+              <span className="ml-1 font-sans text-[15px] font-medium tracking-normal text-night-ink/65">{unit}</span>
             </div>
           ) : (
             <Skeleton night className="h-[68px] w-48" />
@@ -117,9 +117,9 @@ function MarketPulseBase({ commodity, unit, actual, forecast, horizonLabel, load
 function Fact({ label, value, note }: { label: string; value: string; note: string }) {
   return (
     <div className="min-w-0">
-      <dt className="micro text-night-ink/50">{label}</dt>
+      <dt className="micro text-night-ink/65">{label}</dt>
       <dd className="tabular mt-1 truncate font-display text-[24px] leading-none text-white">{value}</dd>
-      <dd className="mt-1 truncate text-[11.5px] text-night-ink/55">{note}</dd>
+      <dd className="mt-1 truncate text-[11.5px] text-night-ink/65">{note}</dd>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { useCommodityActions } from '@/contexts/CommodityContext';
 import { useStoredState } from '@/lib/hooks';
 import { goToTab } from '@/lib/tabs';
 import type { InventoryRow } from '@/lib/types';
+import { usualBand } from '@/lib/usual';
 import { verb } from '@/lib/words';
 import { AreaLine, type SeriesPoint } from '../charts';
 import ProduceIcon, { produceMeta } from '../produce/ProduceIcon';
@@ -17,12 +18,6 @@ interface AnomalyCardProps {
   actual: SeriesPoint[];
   inventory: InventoryRow[];
 }
-
-const median = (xs: number[]) => {
-  const s = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
 
 const longDay = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const trendPct = (r: InventoryRow) => {
@@ -38,22 +33,8 @@ function AnomalyCardBase({ commodity, unit, actual, inventory }: AnomalyCardProp
   const label = meta.label;
   const [dismissed, setDismissed] = useStoredState<string[]>('smartstock.anomaly.dismissed', []);
 
-  const story = useMemo(() => {
-    if (actual.length < 4) return null;
-    const values = actual.map((p) => p.value);
-    const latest = actual[actual.length - 1];
-    const usual = median(values.slice(0, -1));
-    // Robust spread (median absolute deviation), never narrower than 5% of the usual price
-    const mad = median(values.slice(0, -1).map((v) => Math.abs(v - usual))) * 1.4826;
-    const half = Math.max(mad, usual * 0.05);
-    const expected = actual.map((p, i) => {
-      const window = values.slice(Math.max(0, i - 4), i);
-      const center = window.length ? median(window) : p.value;
-      return { date: p.date, lo: center - half, hi: center + half };
-    });
-    const ratio = latest.value / usual;
-    return { latest, usual, ratio, expected, outside: Math.abs(latest.value - usual) > half };
-  }, [actual]);
+  // Usual price and band (median + robust spread), shared with the Alerts page
+  const story = useMemo(() => usualBand(actual), [actual]);
 
   const key = story ? `${commodity}|${story.latest.date}` : '';
   const isDismissed = key !== '' && dismissed.includes(key);

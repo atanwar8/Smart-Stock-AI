@@ -121,7 +121,7 @@ function RailBase({ activeTab, badges, status }: RailProps) {
               key={tab.id}
               href={`#/${tab.id}`}
               aria-current={active ? 'page' : undefined}
-              className={cx('relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[16px] transition-colors', active ? 'text-ink' : 'text-faint')}
+              className={cx('relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-[16px] transition-colors', active ? 'text-ink' : 'text-muted')}
             >
               <span className={cx('flex h-8 w-12 items-center justify-center rounded-full transition-[background-color] duration-300', active && 'bg-well')}>
                 <Icon className="h-[19px] w-[19px]" strokeWidth={active ? 2.1 : 1.8} />

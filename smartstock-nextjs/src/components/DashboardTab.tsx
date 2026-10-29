@@ -103,7 +103,9 @@ export default function DashboardTab() {
           </>
         }
         summary={
-          <>
+          // Reserves the sentence's loaded height (2 lines on desktop, ~4 on a phone at 15px/1.625): it starts as
+          // one line and grows when prices arrive, which pushed every card below it down (Lighthouse CLS 0.24)
+          <span className="block min-h-[6.5em] sm:min-h-[3.25em]">
             {needsOrder.length > 0 ? (
               <>
                 <b>{count(needsOrder.length, 'item')}</b> {needsOrder.length === 1 ? 'needs' : 'need'} ordering soon
@@ -125,7 +127,7 @@ export default function DashboardTab() {
                 <b>{Math.abs(change) < 0.5 ? 'hold steady' : `${change > 0 ? 'rise' : 'fall'} ${Math.abs(change).toFixed(1)}%`}</b> {PERIOD[period].phrase}.
               </>
             )}
-          </>
+          </span>
         }
         actions={
           <Segmented

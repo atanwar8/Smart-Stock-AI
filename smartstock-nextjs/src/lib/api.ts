@@ -7,6 +7,14 @@ import { useCallback, useEffect, useState } from 'react';
 // Set NEXT_PUBLIC_API_URL only when the API lives on a different host.
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
+/** A non-2xx answer; `status` lets callers treat e.g. 404 or 409 as a state rather than a failure */
+export class ApiError extends Error {
+  constructor(public status: number, public detail: string) {
+    super(`${status}: ${detail}`);
+    this.name = 'ApiError';
+  }
+}
+
 export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, { cache: 'no-store', ...init });
   if (!response.ok) {
@@ -14,7 +22,7 @@ export async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       detail = (await response.json()).detail ?? detail;
     } catch {}
-    throw new Error(`${response.status}: ${detail}`);
+    throw new ApiError(response.status, String(detail));
   }
   return response.json() as Promise<T>;
 }

@@ -79,7 +79,7 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
   }
 
   return (
-    <div role="radiogroup" aria-label="Forecasting model" className="grid gap-3 sm:grid-cols-2">
+    <div role="radiogroup" aria-label="Forecasting model" className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2">
       {ordered.map((m, i) => {
         const row = rows.get(m.id);
         const active = m.id === selected;
@@ -138,7 +138,7 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
               <p className="relative mt-3 font-display text-[30px] leading-[1.05] tracking-[-0.01em]">
                 {m.name}
               </p>
-              <p className="relative mt-2 max-w-[44ch] text-[13.5px] leading-snug text-night-ink/80">{disabled ? m.reason : m.blurb}</p>
+              <p className="relative mt-2 max-w-[44ch] break-words text-[13.5px] leading-snug text-night-ink/80">{disabled ? m.reason : m.blurb}</p>
               <div className="relative mt-4 flex flex-wrap gap-1.5">
                 <Chip tone="night">
                   <SpeedIcon speed={m.speed} />
@@ -175,7 +175,7 @@ function ModelPicker({ models, board, selected, onSelect }: ModelPickerProps) {
               </span>
               {active && <Check aria-hidden className="h-4 w-4 shrink-0 text-forecast" strokeWidth={3} />}
             </div>
-            <p className="mt-2.5 line-clamp-2 text-[12.5px] leading-snug text-muted">{disabled ? (m.reason ?? 'Not available on this server.') : m.blurb}</p>
+            <p className="mt-2.5 line-clamp-2 break-words text-[12.5px] leading-snug text-muted">{disabled ? (m.reason ?? 'Not available on this server.') : m.blurb}</p>
             <div className="mt-auto flex flex-wrap gap-1.5 pt-3">
               {!disabled && (
                 <Chip>

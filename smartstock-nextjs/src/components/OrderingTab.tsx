@@ -12,7 +12,7 @@ import { Bars } from './charts';
 import OrderCalendar, { type CalendarView } from './ordering/OrderCalendar';
 import ProduceIcon, { produceMeta } from './produce/ProduceIcon';
 import ZipCodeInput from './ZipCodeInput';
-import { Button, Card, CardHeader, Empty, ErrorNote, Field, Micro, PageHeader, Pill, Skeleton, money, statusLabel, statusTone, type Tone } from './ui';
+import { Button, Card, CardHeader, Empty, ErrorNote, Field, Micro, PageHeader, Pill, Skeleton, money, statusLabel, statusTone } from './ui';
 
 // The API phrases reasons like "STARTER INVENTORY: Begin with 40 lbs…"; split the shouty tag from the sentence
 const splitReason = (reason = '') => {
@@ -21,8 +21,6 @@ const splitReason = (reason = '') => {
   const tag = m[1].toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
   return { tag, text: m[2] };
 };
-
-const urgencyTone = (u: string): Tone => (u === 'high' ? 'bad' : u === 'medium' ? 'warn' : 'good');
 
 export default function OrderingTab({ onInventoryChange }: { onInventoryChange?: () => void }) {
   const { selectedCommodity, selectedState, selectedZipCode, priceUnit } = useCommodityState();

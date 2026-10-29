@@ -42,7 +42,7 @@ function Shell() {
   const { setSelectedCommodity } = useCommodityActions();
 
   // Rail badges: alerts waiting, and stock that needs ordering
-  const alerts = useApi<{ alerts: AlertItem[] }>('/alerts/recent');
+  const alerts = useApi<{ alerts: AlertItem[] }>('/alerts/recent?limit=100');
   const inventory = useApi<{ inventory: InventoryRow[] }>('/inventory/list');
   const { reload: reloadAlerts } = alerts;
   const { reload: reloadInventory } = inventory;
