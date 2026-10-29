@@ -8,6 +8,7 @@ import type { InventoryRow } from '@/lib/types';
 import { num } from '@/lib/weather';
 import { verb } from '@/lib/words';
 import { Dial } from '../charts';
+import { useWidth } from '../charts/hooks';
 import ProduceIcon, { produceMeta } from '../produce/ProduceIcon';
 import { Button, Card, CardHeader, Delta, Empty, Pill, Skeleton, statusLabel, statusTone } from '../ui';
 
@@ -22,6 +23,9 @@ function CoverDialBase({ rows, loading }: { rows: InventoryRow[]; loading: boole
   const { setSelectedCommodity } = useCommodityActions();
   const items = rows.map((r) => ({ commodity: r.ingredient, days: num(r.days_left) }));
   const first = [...items].sort((a, b) => a.days - b.days)[0];
+  // As large as the card allows, up to 340 px (was a fixed 256): the item bubbles sit on the rim, so leave ~36 px
+  const [boxRef, boxWidth] = useWidth<HTMLDivElement>();
+  const dialSize = Math.max(240, Math.min(340, (boxWidth || 340) - 36));
 
   return (
     <Card label="Days of cover in the walk-in" className="flex flex-col lg:col-span-5">
@@ -34,21 +38,21 @@ function CoverDialBase({ rows, loading }: { rows: InventoryRow[]; loading: boole
           </Button>
         }
       />
-      <div className="flex flex-1 items-center justify-center px-5 pb-6 pt-1">
+      <div ref={boxRef} className="flex flex-1 items-center justify-center px-5 pb-6 pt-1">
         {loading && !rows.length ? (
-          <Skeleton className="h-[248px] w-[248px] rounded-full" />
+          <Skeleton className="aspect-square w-[300px] max-w-full rounded-full" />
         ) : !rows.length ? (
           <Empty icon={PackageOpen} title="The walk-in is empty" body="Log what's on the shelves to see how long it lasts." action={<Button variant="primary" size="sm" onClick={() => goToTab('ordering')}>Log stock</Button>} />
         ) : (
           <Dial
-            size={256}
+            size={dialSize}
             items={items}
             onSelect={setSelectedCommodity}
             center={
               first && (
                 <>
-                  <span className="tabular font-display text-[56px] leading-none text-ink">{first.days.toFixed(1)}</span>
-                  <span className="mt-1 text-[12.5px] leading-snug text-muted">
+                  <span className="tabular font-display text-[64px] leading-none text-ink">{first.days.toFixed(1)}</span>
+                  <span className="mt-1 text-[13.5px] leading-snug text-muted">
                     days until {produceMeta(first.commodity).label.toLowerCase()} {verb(produceMeta(first.commodity).label, 'run', 'runs')} out
                   </span>
                 </>

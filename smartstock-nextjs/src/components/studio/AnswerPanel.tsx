@@ -1,6 +1,6 @@
 'use client';
 
-// Presagio-style answer: one big serif number, the API's one-sentence summary, and the backtest metrics
+// Presagio-style answer: one big number, the API's one-sentence summary, and the backtest metrics
 // translated into plain kitchen language.
 
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';

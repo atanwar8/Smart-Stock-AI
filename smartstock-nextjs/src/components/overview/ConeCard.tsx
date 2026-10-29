@@ -20,7 +20,7 @@ interface ConeCardProps {
 
 const longDay = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-// Presagio-style answer: one big serif number for "where it lands", the cone for how sure we are
+// Presagio-style answer: one big number for "where it lands", the cone for how sure we are
 function ConeCardBase({ commodity, unit, actual, forecast, source, loading }: ConeCardProps) {
   const label = produceMeta(commodity).label;
   const last = actual.at(-1);
