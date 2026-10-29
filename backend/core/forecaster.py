@@ -140,11 +140,23 @@ class XGBoostLightGBMForecaster:
         }
     
     def load_training_data(self, train_path: str):
-        """Load training data"""
+        """Load training data from the bundled USDA export (used when the training store has no rows)"""
         try:
             frame = pd.read_csv(train_path)
+        except Exception as e:
+            print(f"❌ Error loading data: {e}")
+            return False
+        return self.load_training_frame(frame)
+
+    def load_training_frame(self, frame: pd.DataFrame):
+        """Use these USDA rows (CSV columns) as the price history, e.g. the training store's rows"""
+        try:
+            frame = frame.copy()
             frame['report_date'] = pd.to_datetime(frame['report_date'])
             self.train_data = frame  # assigned once, fully parsed, so the new data version sees the final frame
+            # Models fitted (or adopted) on the previous history would forecast from stale prices
+            self.models.clear()
+            self.model_performance.clear()
 
             # Get commodities that have sufficient data
             commodity_counts = self.train_data['commodity'].value_counts()

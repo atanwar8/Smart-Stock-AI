@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd smartstock-nextjs && npm ci --no-audit --no-fund",
+  "buildCommand": "cd smartstock-nextjs && npm run build",
+  "outputDirectory": "smartstock-nextjs/out",
+  "regions": ["pdx1"],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{smartstock-nextjs/**,docs/**,supabase/**,promo-video/**,.github/**,backend/tests/**,backend/var/**,backend/.venv/**,backend/.venv-ml/**,backend/.pytest_cache/**,**/__pycache__/**,**/node_modules/**,Example.csv,Example_Train_backup_*.csv,processed_usda_vegetables_*.csv,Test.html,Latest_App_Streamlit.py,train_test_updater.py,backend/start_backend.py}"
+    }
+  },
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
+  "crons": [{ "path": "/api/pipeline/cron", "schedule": "0 15 * * 6" }],
+  "headers": [
+    {
+      "source": "/_next/static/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "X-Frame-Options", "value": "DENY" }
+      ]
+    }
+  ]
+}

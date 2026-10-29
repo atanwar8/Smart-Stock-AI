@@ -210,6 +210,34 @@ def start() -> Dict:
     return {"job_id": job_id, "state": "running"}
 
 
+_sync_lock = threading.Lock()
+# A 'running' ingest row older than this was left by an instance that was stopped mid-run (Vercel ends a function
+# after its maxDuration, 300 s), so it no longer means a refresh is in progress
+RUNNING_ROW_MAX_AGE = timedelta(minutes=15)
+
+
+def run_now() -> Dict:
+    """Run a refresh inside the current request and return the final status.
+
+    For serverless hosts (Vercel): a function instance is frozen once its response is sent, so start()'s background
+    thread would stall. The request itself stays open for the whole Extract -> Load -> Train -> Test (about 70 s on
+    a laptop for 11 vegetables; vercel.json allows 300 s). Raises Busy if this process is already refreshing; the
+    store's advisory lock still stops two instances refreshing at once (the second ends as 'failed' with a reason).
+    """
+    if not _sync_lock.acquire(blocking=False):
+        raise Busy("A data refresh is already running. Try again when it finishes.")
+    try:
+        if _thread is not None and _thread.is_alive():
+            raise Busy("A data refresh is already running. Try again when it finishes.")
+        job_id = str(uuid.uuid4())
+        _state.update(state="running", step="extract", progress=0.0, message="Starting", job_id=job_id,
+                      started_at=_now(), finished_at=None)
+        _run(job_id)
+        return {"job_id": job_id, **status()}
+    finally:
+        _sync_lock.release()
+
+
 def wait(timeout: Optional[float] = None) -> None:
     """Block until the current refresh ends (tests and scripts)."""
     if _thread is not None:
@@ -218,8 +246,25 @@ def wait(timeout: Optional[float] = None) -> None:
 
 def status() -> Dict:
     store = get_store()
-    return {**_state.snapshot(), "store": store.summary(), "last_run": store.last_ingest_run(),
+    snapshot, last_run = _state.snapshot(), store.last_ingest_run()
+    # Progress lives in the refreshing instance's memory; another instance (serverless) still sees the durable row
+    if snapshot.get("state") != "running" and _running_elsewhere(last_run):
+        snapshot.update(state="running", step="extract", progress=0.1,
+                        message="Refreshing on another server instance. This page updates when it finishes.")
+    return {**snapshot, "store": store.summary(), "last_run": last_run,
             "usda_api_configured": bool(os.getenv("MARS_API_KEY"))}
+
+
+def _running_elsewhere(last_run: Optional[Dict]) -> bool:
+    if not last_run or last_run.get("status") != "running" or not last_run.get("started_at"):
+        return False
+    try:
+        started = datetime.fromisoformat(str(last_run["started_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - started < RUNNING_ROW_MAX_AGE
 
 
 def runs(limit: int = 20, offset: int = 0) -> Dict:

@@ -8,12 +8,15 @@ import os
 import threading
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from ml import pipeline, service
 
 router = APIRouter(tags=["forecast"])
+
+# Vercel sets VERCEL=1. There, nothing trains at startup and a refresh runs inside its request (pipeline.run_now)
+SERVERLESS = bool(os.getenv("VERCEL"))
 
 
 class PreviewRequest(BaseModel):
@@ -39,7 +42,7 @@ def _answer(call, *args, **kwargs):
 @router.on_event("startup")
 def _prepare_store():
     """Seed/train in the background: a cold Supabase or SQLite store must never delay the server answering."""
-    if os.getenv("PIPELINE_ON_STARTUP", "1") != "1":
+    if os.getenv("PIPELINE_ON_STARTUP", "0" if SERVERLESS else "1") != "1":
         return
 
     def run():
@@ -84,9 +87,25 @@ def forecast_active(commodity: Optional[str] = None):
 
 
 @router.post("/pipeline/refresh", status_code=202)
-def pipeline_refresh():
+def pipeline_refresh(response: Response):
     try:
+        if SERVERLESS:   # a background thread would freeze with the response: run it here, answer when done
+            response.status_code = 200
+            return pipeline.run_now()
         return pipeline.start()
+    except pipeline.Busy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/pipeline/cron")
+def pipeline_cron(authorization: Optional[str] = Header(None)):
+    """The scheduled refresh (vercel.json "crons", weekly, after USDA's Friday retail report). Vercel sends
+    "Authorization: Bearer <CRON_SECRET>" when the CRON_SECRET variable is set, and then nobody else can start it."""
+    secret = os.getenv("CRON_SECRET")
+    if secret and authorization != f"Bearer {secret}":
+        raise HTTPException(status_code=401, detail="Only the scheduled job can call this.")
+    try:
+        return pipeline.run_now()
     except pipeline.Busy as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

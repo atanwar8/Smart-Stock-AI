@@ -50,8 +50,9 @@ The two naive rules are there so every claim of skill has an honest reference.
 the 80% range at horizon h is the forecast × exp(±q), where q is the 80th percentile of that model's past absolute
 log errors at the same h. In logs, the range scales with the price.
 
-**Trained in the backend.** The pipeline does all fitting and testing (at startup when no current results exist, and
-after every refresh): about 25 CPU-seconds for 11 vegetables × 6 models, roughly 3 minutes on Render's 0.15 CPU.
+**Trained in the backend.** The pipeline does all fitting and testing (after every refresh: the Data refresh button
+or the weekly Vercel cron; locally also at startup when no current results exist): about 70 s for a refresh that
+fetched 15 months of USDA weeks and scored 11 vegetables × 6 models on a laptop, well inside Vercel's 300 s limit.
 It stores each model's scores, calibration and 8-week forecast. The studio only reads them, so a sample costs
 milliseconds; there is no per-click training and no history-window option (models always use every stored week).
 

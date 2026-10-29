@@ -237,7 +237,9 @@ def _current_runs(commodity: str, last_date: str) -> Dict[str, Dict]:
     """The commodity's newest pipeline training runs, if they were scored on the data stored now (and written by a
     pipeline that stores forecast paths: older runs are ignored and retrained, see backtest.STORE_VERSION)."""
     def load():
-        runs = get_store().latest_training_runs(commodity)
+        # One query for every vegetable's newest runs, shared by all of them (not one query per vegetable).
+        # 20 x 12 rows covers the last three refreshes (each writes 11 vegetables x 6 models).
+        runs = _memo.get(_version(), ("runs-all",), lambda: get_store().latest_training_runs(scan=20))
         return {model: run for model, run in runs.get(commodity, {}).items()
                 if run.get("test_end") == last_date and (run.get("params") or {}).get("version", 1) >= STORE_VERSION}
     return _memo.get(_version(), ("runs", commodity), load)

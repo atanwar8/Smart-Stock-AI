@@ -1,6 +1,7 @@
 # Handoff — redesign + Forecast Studio + Supabase pipeline
 
-Status: **feature-complete on the branch, not merged** (updated 2026-10-29 by the cloud session that resumed this work). Branch `feat/forecast-studio-redesign` on GitHub. The desktop session's uncommitted work was pushed by the user as commit 7738b9e; everything after it is in the commits that follow.
+Status: **merged to `main` (PRs #17-#21); Vercel move ready on branch `feat/vercel-read-only-forecasts`, not committed or deployed yet** (see "Move to Vercel" at the end).
+Earlier status line, kept for history: **feature-complete on the branch, not merged** (updated 2026-10-29 by the cloud session that resumed this work). Branch `feat/forecast-studio-redesign` on GitHub. The desktop session's uncommitted work was pushed by the user as commit 7738b9e; everything after it is in the commits that follow.
 The contract for all work is [`SPEC.md`](SPEC.md). Each workstream keeps its own running note next to this file:
 [`frontend-shell.md`](frontend-shell.md), [`frontend-studio.md`](frontend-studio.md), [`backend-perf.md`](backend-perf.md), [`ml-pipeline.md`](ml-pipeline.md).
 If you are the next agent: read SPEC.md, then those four notes, then finish the checklist below in order.
@@ -70,3 +71,35 @@ Not verified in the cloud: a real USDA refresh (no
 - [ ] Add `SUPABASE_DB_URL` (session pooler) to the Render service before merging to `main` (merging deploys).
 - [ ] Decide on the Supabase advisor WARN about `public.rls_auto_enable()` (see above).
 - [ ] Open the pull request to `main` when the user asks.
+
+## Move to Vercel + train once, read everywhere (2026-10-30, desktop session)
+The user asked to leave Render (slow wake-ups) for Vercel and to make predictions faster. Done on branch
+`feat/vercel-read-only-forecasts` (uncommitted when this was written):
+- **Vercel**: `vercel.json` (static export from the CDN, `api/index.py` Python 3.12 function in `pdx1`, `/api/(.*)`
+  rewrite, weekly cron `/api/pipeline/cron` Saturdays 15:00 UTC, immutable `_next/static`), `api/requirements.txt`
+  (backend pins minus uvicorn, plus scipy 1.17.1; `tests/test_deploy.py` keeps them equal), `.python-version` 3.12,
+  `.vercelignore`. `render.yaml` removed; ADR-007 supersedes ADR-001. Pins bumped for 3.12 wheels: numpy 1.26.4,
+  pandas 2.2.3, scikit-learn 1.5.2. All tests pass on 3.9 (local venv) and on 3.12 with Vercel's resolved versions.
+- **Serverless behaviour** (`VERCEL=1`): no startup training/seeding/CSV refresh; lazy init if ASGI startup is
+  skipped; `POST /pipeline/refresh` and `GET /pipeline/cron` (guarded by `CRON_SECRET`) run the pipeline inside the
+  request (`pipeline.run_now`, ~70 s measured for a 15-month extract + 11 vegetables x 6 models); status on other
+  instances reads the `ingest_runs` row (rows older than 15 min = abandoned); SQLite fallback path is `/tmp`.
+- **Train once, read everywhere**: the dashboard's history is the store's rows for `SERIES_REGION` (fixes averaging
+  all USDA regions together after the API refresh), and every daily forecast adopts the pipeline's stored champion,
+  or the forecast the chef **applied** in the studio (its points and pace, then its model's path). One query reads
+  every vegetable's runs (no N+1). Cold start measured: first answer 1.7 s, walk-in list 920 ms -> 3 ms,
+  leaderboard 24 s -> 2 ms; first 7-day call still ~1 s for the Open-Meteo weather fetch (cached 30 min).
+- Live Supabase already holds the first real refresh (run 3: 20,493 rows, Jul 2025 -> Oct 23 2026, 132 training runs).
+  The password in the desktop's `backend/.env` is stale (it was reset for Render); local runs use a local store.
+
+### Remaining (in order)
+1. User approves Vercel team access for the connector (team `aryan-tanwar`, `team_XM4Q3lOxug35nEahNtI7X3lo`),
+   project `smartstock-ai` (`prj_pvZWmhwX15UAKN6szkeLhQrVvht7`).
+2. User adds Vercel env vars (Production + Preview): `SUPABASE_DB_URL` (same value as Render's), `MARS_API_KEY`,
+   `CRON_SECRET` (any long random string). Never paste them in chat.
+3. Commit this branch, push, open a PR; check the preview deployment (Overview, Studio sample -> Apply, Data
+   refresh), then merge to `main` for production. Confirm the project's Git connection and that the build uses
+   `vercel.json` (framework none, output `smartstock-nextjs/out`).
+4. Update the README's first lines with the production URL; suspend/delete the Render service.
+5. Follow-up: persist inventory and alert settings in Supabase (on Vercel they are per instance and reset on a cold
+   start). Optional: `backend/.venv-ml` (1.2 GB, old TimesFM env) can be deleted.

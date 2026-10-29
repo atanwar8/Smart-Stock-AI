@@ -1,7 +1,7 @@
 # ADR-001: Ship the dashboard and API as one container on Render
 
 ## Status
-Accepted
+Superseded by [ADR-007](ADR-007-vercel-and-supabase.md) on 2026-10-30 (the app moved to Vercel + Supabase)
 
 ## Date
 2026-10-27

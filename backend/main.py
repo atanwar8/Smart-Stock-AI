@@ -34,7 +34,14 @@ FRONTEND_DIR = Path(os.getenv('FRONTEND_DIR', PROJECT_DIR / 'smartstock-nextjs' 
 # Import our forecaster
 from core.forecaster import XGBoostLightGBMForecaster
 from core import forecaster_utils, usda_api
+from store import get_store
+from ml.config import SERIES_REGION
 import requests
+
+# On Vercel (and other serverless hosts) an instance can start for any request and is frozen between requests,
+# so nothing heavy runs at startup or in background threads: the scheduled refresh (vercel.json crons ->
+# /pipeline/cron) trains, and every page reads what it stored.
+SERVERLESS = bool(os.getenv('VERCEL'))
 
 # Inventory Management Data Models
 class InventoryItem(BaseModel):
@@ -406,6 +413,9 @@ def ensure_model(commodity: str) -> None:
     with _train_lock(commodity):
         if commodity in forecaster.models:
             return
+        # The pipeline already trained and tested every model on the stored weeks: read its forecast
+        if forecaster_utils.adopt_pipeline_forecast(forecaster, commodity):
+            return
         result = forecaster_utils.train_model(forecaster, commodity)
         if not result.get('success'):
             _untrainable[commodity] = forecaster.data_version
@@ -421,21 +431,110 @@ def warm_forecasts() -> None:
 # Keeps a reference to background startup work so it isn't garbage-collected mid-run
 startup_tasks = set()
 
+# Store data version the dashboard's price history was read at (None: the bundled CSV), and the last one checked
+_history_version: Dict[str, Optional[str]] = {'version': None, 'seen': None, 'applied': None}
+_history_lock = threading.Lock()
+_init_lock = asyncio.Lock()
+
+
+def load_price_history(target=None) -> bool:
+    """The dashboard's price history: the training store's rows when it has any (Supabase in the cloud, so every
+    page shows the weeks the pipeline added), else the bundled USDA export."""
+    target = target or forecaster
+    try:
+        store = get_store()
+        if store.price_count() > 0:
+            version = store.data_version()
+            # One region, like the bundled export and the pipeline: USDA's API also returns the other regions,
+            # and averaging them in would quote a price the forecasts were never trained on
+            if target.load_training_frame(store.read_rows(region=SERIES_REGION)):
+                _history_version.update(version=version, seen=version)
+                adopt_stored_forecasts(target)
+                return True
+    except Exception as e:
+        print(f"⚠️ Training store unavailable, using {TRAIN_DATA_PATH}: {e}")
+    _history_version['version'] = None
+    return target.load_training_data(TRAIN_DATA_PATH)
+
+
+def adopt_stored_forecasts(target) -> int:
+    """Take every vegetable's stored champion forecast now (reads only, one query for all of them), so the first
+    page views and the model count don't wait for it. Vegetables without one are trained on first use."""
+    adopted = 0
+    try:
+        store = get_store()
+        _history_version['applied'] = store.applied_version()
+        applied = store.active_forecasts()  # every vegetable's applied forecast, one query
+    except Exception:
+        applied = None
+    for commodity in list(target.viable_commodities):
+        try:
+            adopted += bool(forecaster_utils.adopt_pipeline_forecast(target, commodity, applied))
+        except Exception as e:
+            print(f"⚠️ Stored forecast for {commodity} unavailable: {e}")
+    return adopted
+
+
+def sync_price_history() -> None:
+    """Re-read the price history after a refresh or training here or in another instance. The store caches its
+    data version for 30 s, so this costs nothing on most requests."""
+    if forecaster is None:
+        return
+    try:
+        store = get_store()
+        version, applied = store.data_version(), store.applied_version()
+    except Exception:
+        return
+    if version == _history_version['seen'] and applied == _history_version['applied']:
+        return
+    with _history_lock:
+        if version != _history_version['seen']:
+            _history_version['seen'] = version
+            if store.price_count() > 0:
+                load_price_history()  # also re-adopts every stored and applied forecast
+        elif applied != _history_version['applied'] and _history_version['version'] is not None:
+            # A forecast was applied in the studio: ordering, alerts and the overview plan with it from now on
+            for commodity, info in list(forecaster.models.items()):
+                if info.get('type') == forecaster_utils.PIPELINE_MODEL_TYPE:
+                    forecaster.models.pop(commodity, None)
+            adopt_stored_forecasts(forecaster)
+        _history_version['applied'] = applied
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize the forecaster on startup"""
+    """Initialize the forecaster on startup (or on the first request, where a host skips startup events)"""
+    async with _init_lock:
+        await _initialize()
+
+
+@app.middleware("http")
+async def ready_before_request(request, call_next):
+    """Serverless runtimes may not send ASGI startup events: initialize on first use, then keep the price history
+    in step with the training store."""
+    if forecaster is None:
+        async with _init_lock:
+            if forecaster is None:
+                await _initialize()
+    elif request.url.path.startswith(('/api/', '/dashboard', '/inventory', '/alerts', '/7-day', '/30-day',
+                                      '/market-volatility', '/commodities', '/charts', '/predict')):
+        await asyncio.get_running_loop().run_in_executor(None, sync_price_history)
+    return await call_next(request)
+
+
+async def _initialize():
     global forecaster
 
-    train_path = TRAIN_DATA_PATH
+    # Initialize forecaster; it becomes visible to requests only once its price history is loaded
+    candidate = XGBoostLightGBMForecaster()
+    candidate.load_commodity_mapping()
 
-    # Initialize forecaster
-    forecaster = XGBoostLightGBMForecaster()
-    forecaster.load_commodity_mapping()
-
-    # Load training data
-    success = forecaster.load_training_data(train_path)
+    # Load training data: the training store, or the bundled CSV until the store has rows
+    success = await asyncio.get_running_loop().run_in_executor(None, load_price_history, candidate)
+    forecaster = candidate
     if not success:
         print("⚠️ Warning: Could not load training data")
+    from_store = _history_version['version'] is not None
 
     # A fresh deploy starts with an empty walk-in; give the demo a few tracked items
     if os.getenv('SEED_DEMO_INVENTORY', '1') == '1' and not inventory_manager.inventory_items:
@@ -444,13 +543,15 @@ async def startup_event():
         ]:
             inventory_manager.update_inventory(ingredient, stock, usage, capacity)
 
-    # With a USDA key, pull new weeks first (the bundled CSV is all a fresh container has), then train
-    if success and os.getenv('MARS_API_KEY') and os.getenv('REFRESH_ON_STARTUP', '1') == '1':
+    # The CSV-only setup: with a USDA key, pull new weeks into the CSV first, then train. With a training store,
+    # the pipeline (/pipeline/refresh) is the refresh, and the history above already has its weeks.
+    if (success and not from_store and not SERVERLESS and os.getenv('MARS_API_KEY')
+            and os.getenv('REFRESH_ON_STARTUP', '1') == '1'):
         task = asyncio.create_task(refresh_on_startup())
         startup_tasks.add(task)
         task.add_done_callback(startup_tasks.discard)
     # Otherwise train every commodity's model in the background so the first page views are fast
-    elif success and os.getenv('PRETRAIN_MODELS', '1') == '1':
+    elif success and os.getenv('PRETRAIN_MODELS', '0' if SERVERLESS else '1') == '1':
         def pretrain():
             for commodity in list(forecaster.viable_commodities):
                 try:
@@ -616,11 +717,12 @@ def get_kpi():
                 if isinstance(info, dict) and 'performance' in info
             }
             for commodity, performance in list(performances.items()):
-                if isinstance(performance, dict) and 'r2' in performance:
-                    r2_score = performance['r2']
+                if isinstance(performance, dict) and 'mae' in performance:
+                    r2_score = performance.get('r2')
                     accuracy_details[commodity] = {
                         'r2_score': r2_score,
-                        'accuracy_pct': max(0, r2_score * 100),
+                        # Stored pipeline scores have no R²; their skill vs last week's price stands in
+                        'accuracy_pct': max(0, r2_score * 100) if r2_score is not None else max(0, skill_vs_naive(performance)),
                         'mae': performance.get('mae', 0),
                         'skill_pct': skill_vs_naive(performance)
                     }

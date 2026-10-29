@@ -4,6 +4,7 @@ __pycache__/
 backend/smartstock_env/
 venv/
 .venv/
+.venv-*/
 
 # Node / Next.js
 node_modules/

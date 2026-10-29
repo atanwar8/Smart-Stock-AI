@@ -1,5 +1,5 @@
 # Every push and pull request runs the full quality gate in the cloud.
-# Render deploys main only after these checks pass (autoDeployTrigger: checksPass).
+# Vercel deploys every push itself (previews, and main to production); see README "Deploying".
 name: CI
 
 on:
