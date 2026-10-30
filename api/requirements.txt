@@ -1,0 +1,15 @@
+# The Vercel function's Python dependencies (api/index.py, Python 3.12): the runtime part of
+# backend/requirements.txt at the same versions (backend/tests/test_deploy.py keeps them in step), without
+# uvicorn (Vercel serves the ASGI app), plus SciPy pinned to the version the test suite passed with on 3.12.
+fastapi==0.104.1
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+lightgbm==4.5.0
+requests==2.32.3
+python-dotenv==1.0.0
+pydantic==2.5.0
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.13
+statsmodels==0.14.4
+scipy==1.17.1

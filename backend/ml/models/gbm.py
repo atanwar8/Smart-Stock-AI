@@ -23,7 +23,7 @@ import pandas as pd
 from ml.config import MAX_HORIZON
 from ml.models.base import Forecaster, future_index
 
-REFIT_EVERY = 4          # backtests refit the global model every 4 weeks (each fit only sees data <= its date)
+REFIT_EVERY = 8          # backtests refit the global model every 8 weeks (each fit only sees data <= its date)
 MIN_ORIGIN = 8           # earliest origin row (needs a 4-week level and a few lags)
 FEATURES = ["last", "lag1", "lag2", "lag4", "lag8", "lag13", "lag26", "m13", "m26", "vol13", "mom4",
             "h", "woy_sin", "woy_cos", "ly", "ly_change", "code"]

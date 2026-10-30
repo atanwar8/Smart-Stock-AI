@@ -10,7 +10,7 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Hashable, List
+from typing import Any, Callable, Dict, Hashable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -98,6 +98,9 @@ def weekly_prices(train_data: pd.DataFrame, commodity: str) -> pd.Series:
     (e.g. tomatoes per lb and per pint), so raw rows are not a time series.
     """
     rows = train_data[train_data['commodity'] == commodity]
+    if 'organic' in rows.columns:
+        # Conventional rows only, like the training pipeline (ml.series): organic rows come and go and jolt the average
+        rows = rows[rows['organic'] != 'Yes']
     if 'unit' in rows.columns and rows['unit'].notna().any():
         rows = rows[rows['unit'] == rows['unit'].mode().iloc[0]]
     series = rows.groupby(pd.to_datetime(rows['report_date']))['current_wtd_avg_price'].mean()
@@ -222,6 +225,97 @@ def train_simple_model(forecaster, commodity: str, series: pd.Series, weather_da
     return {'success': True, 'model_type': 'Simple Model', 'performance': performance}
 
 
+PIPELINE_MODEL_TYPE = 'Pipeline forecast'
+# The stored series and this dashboard's series must end on the same price, within this share, to adopt a forecast
+ADOPT_PRICE_TOLERANCE = 0.02
+
+
+def adopt_pipeline_forecast(forecaster, commodity: str, applied: Optional[List[Dict]] = None) -> bool:
+    """Use the training pipeline's stored forecast instead of fitting a model while a page waits.
+
+    The pipeline (ml.pipeline, after every refresh) backtests every model on every stored week and keeps each
+    model's 8-week path in its training run; this takes the champion's path (lowest hold-out MASE). It is adopted
+    only when the pipeline scored exactly the weeks this dashboard shows, ending on the same price (same unit),
+    so the Overview, Smart ordering, Alerts and the Forecast Studio all quote one forecast. Returns False when there
+    is no such run (no store, nothing trained yet, data newer than the last training): the caller then trains.
+
+    A forecast the chef applied in the Forecast Studio wins over the champion: its points (with the pace they chose)
+    for the weeks it covers, then its model's stored path at the same pace. `applied` is the store's applied
+    forecasts, when the caller already read them for every vegetable (one query instead of one each).
+    """
+    try:
+        from ml import service  # imported here: the studio's stack is only needed when a store is configured
+        name = service.resolve_commodity(commodity)
+        stored = service.panel()[name]
+        last_week = stored.dates[-1]
+        all_runs = service._current_runs(name, last_week.date().isoformat())
+    except Exception:
+        return False
+    runs = {m: r for m, r in all_runs.items()
+            if m != 'naive' and r.get('metrics') and (r.get('params') or {}).get('future')}
+    if not runs:
+        return False
+    champion = next((m for m, r in runs.items() if r.get('is_champion')), None) or min(
+        runs, key=lambda m: runs[m]['metrics'].get('mase') if runs[m]['metrics'].get('mase') is not None else np.inf)
+
+    series = weekly_series(forecaster, commodity)
+    if series.empty or series.index[-1] != last_week:
+        return False
+    stored_last = float(stored.y.iloc[-1])
+    if abs(float(series.iloc[-1]) - stored_last) > ADOPT_PRICE_TOLERANCE * max(abs(stored_last), 0.01):
+        return False
+
+    chosen, path, applied_row = champion, [float(v) for v in runs[champion]['params']['future']], None
+    try:
+        rows = applied if applied is not None else service.get_store().active_forecasts(name)
+    except Exception:
+        rows = []
+    next_week = (last_week + WEEK).date().isoformat()
+    for row in rows:
+        points = [p for p in (row.get('points') or []) if p.get('yhat') is not None]
+        # Only a forecast made on the weeks stored now (its first point is next week) and with a stored model path
+        if row.get('commodity') == name and row.get('model') in runs and points and points[0].get('date') == next_week:
+            applied_row, chosen = row, row['model']
+            model_path = [float(v) for v in runs[chosen]['params']['future']]
+            yhat = [float(p['yhat']) for p in points][:len(model_path)]
+            pace = yhat[-1] / model_path[len(yhat) - 1] if model_path[len(yhat) - 1] else 1.0
+            path = yhat + [v * pace for v in model_path[len(yhat):]]
+            break
+
+    # The 80% range per week ahead, from the same conformal table the studio uses (stored with the run)
+    from ml import intervals
+    table = (runs[chosen].get('params') or {}).get('calib_full')
+    weekly_widths = intervals.half_width(table, 0.8, len(path)).tolist() if table else None
+
+    metrics = runs[chosen]['metrics']
+    # "Repeating last week's price" is the pipeline's naive model; its hold-out error is the skill baseline
+    naive_mae = ((all_runs.get('naive') or {}).get('metrics') or {}).get('mae')
+    performance = {
+        'mae': float(metrics['mae']),
+        'rmse': float(metrics.get('rmse') or metrics['mae']),
+        'naive_mae': float(naive_mae) if naive_mae else None,
+        'mase': metrics.get('mase'),
+        'coverage': metrics.get('coverage'),
+    }
+    changes = np.diff(np.log(series.to_numpy()[-104:]))
+    forecaster.models[commodity] = {
+        'model': None,
+        'type': PIPELINE_MODEL_TYPE,
+        'model_id': chosen,
+        'model_name': getattr(service.MODELS.get(chosen), 'name', chosen),
+        'applied': applied_row is not None,
+        'weekly_path': path,
+        'weekly_widths': weekly_widths,
+        'performance': performance,
+        'weekly_change_std': float(np.std(changes)) if len(changes) > 1 else 0.05,
+        'trained_at': (applied_row or {}).get('applied_at') or runs[chosen].get('created_at'),
+    }
+    forecaster.model_performance[commodity] = performance
+    source = 'applied' if applied_row else 'stored'
+    print(f"📦 {commodity}: using the {source} {chosen} forecast (hold-out MAE ${performance['mae']:.3f})")
+    return True
+
+
 def _forecast_weeks(model, series: pd.Series, weeks: int) -> List[float]:
     """Predict week by week, feeding each prediction back in as history."""
     history = series.copy()
@@ -266,13 +360,22 @@ def _daily_forecast(forecaster, commodity: str, days_ahead: int, model_info: Dic
     last_price = float(series.iloc[-1])
     if model_info['type'] == 'Simple Model':
         weekly = [last_price] * weeks
+    elif model_info.get('weekly_path'):
+        path = model_info['weekly_path']  # the pipeline's stored path: no model runs here
+        weekly = [path[min(i, len(path) - 1)] for i in range(weeks)]
     else:
         weekly = _forecast_weeks(model_info['model'], series, weeks)
 
     # Weekly forecasts → one price per day, interpolated from the latest report
     days = np.arange(1, days_ahead + 1)
     predictions = np.interp(days, np.arange(0, 7 * weeks + 1, 7), [last_price] + weekly)
-    spread = BAND_Z * model_info['weekly_change_std'] * np.sqrt(days / 7)
+    widths = model_info.get('weekly_widths')
+    if widths:
+        # Calibrated 80% log half-widths per week ahead (conformal, from the pipeline's backtest), zero today
+        steps = [widths[min(i, len(widths) - 1)] for i in range(weeks)]
+        spread = np.interp(days, np.arange(0, 7 * weeks + 1, 7), [0.0] + steps)
+    else:
+        spread = BAND_Z * model_info['weekly_change_std'] * np.sqrt(days / 7)
     last_date = series.index[-1]
 
     return {
@@ -365,6 +468,8 @@ def get_feature_importance(forecaster, commodity: str) -> Dict:
     
     if model_info['type'] == 'Simple Model':
         return {'trend': 0.6, 'seasonal': 0.4}
+    if model_info['type'] == PIPELINE_MODEL_TYPE:
+        return {}  # the stored forecast carries no feature importances
     
     try:
         model = model_info['model']

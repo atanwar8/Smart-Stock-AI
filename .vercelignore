@@ -1,0 +1,12 @@
+# Never upload local secrets, environments or build output with `vercel deploy` (Git deploys only see committed files)
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.template
+backend/.venv
+backend/.venv-ml
+backend/var
+**/node_modules
+smartstock-nextjs/.next
+smartstock-nextjs/out

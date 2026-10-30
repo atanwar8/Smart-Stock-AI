@@ -13,7 +13,7 @@ FROM python:3.11-slim
 # WEB_CONCURRENCY = uvicorn worker processes. Keep 1 while inventory and alerts live in process memory
 # (each worker would hold its own copy); see the README's scaling notes before raising it.
 # OMP/OPENBLAS/MKL_NUM_THREADS = 1: inside a container the libraries see the host's cores, not the CPU share the
-# service gets (0.15 of a CPU on Render's free plan). LightGBM and numpy then start one thread per host core and
+# service gets (e.g. 0.15 of a CPU on a small cloud plan). LightGBM and numpy then start one thread per host core and
 # OpenMP threads spin while they wait, so most of the small CPU share went to threads waiting on each other:
 # 4 threads on one core cost 2.1x the CPU of 1 for identical results. One thread each is the fastest here.
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -39,7 +39,7 @@ COPY --from=ui /ui/out smartstock-nextjs/out
 
 WORKDIR /app/backend
 EXPOSE 8000
-# For `docker run` / compose; Render probes /health itself (render.yaml)
+# For `docker run` / compose (the cloud deploy is Vercel, see vercel.json)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8000'), timeout=4)"
 # exec: uvicorn is PID 1 and gets the platform's shutdown signal. --forwarded-allow-ips: trust the platform

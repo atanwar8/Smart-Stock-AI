@@ -216,7 +216,7 @@ class Evaluation:
 
     @classmethod
     def from_eval(cls, ev: ModelEval) -> "Evaluation":
-        return cls(model=ev.model, commodity=ev.commodity, unit=ev.unit, metrics=dict(ev.metrics),
+        return cls(model=ev.model, commodity=ev.commodity, unit=ev.unit, metrics={**ev.metrics, "val_mase": ev.val_mase},
                    backtest=list(ev.backtest), test_levels=list(ev.test_levels), calib_test=ev.calib_test,
                    calib_full=ev.calib_full, weights=ev.weights,
                    window={"train_start": ev.train_start, "train_end": ev.train_end,
@@ -237,7 +237,9 @@ def _current_runs(commodity: str, last_date: str) -> Dict[str, Dict]:
     """The commodity's newest pipeline training runs, if they were scored on the data stored now (and written by a
     pipeline that stores forecast paths: older runs are ignored and retrained, see backtest.STORE_VERSION)."""
     def load():
-        runs = get_store().latest_training_runs(commodity)
+        # One query for every vegetable's newest runs, shared by all of them (not one query per vegetable).
+        # 20 x 12 rows covers the last three refreshes (each writes 11 vegetables x 6 models).
+        runs = _memo.get(_version(), ("runs-all",), lambda: get_store().latest_training_runs(scan=20))
         return {model: run for model, run in runs.get(commodity, {}).items()
                 if run.get("test_end") == last_date and (run.get("params") or {}).get("version", 1) >= STORE_VERSION}
     return _memo.get(_version(), ("runs", commodity), load)
@@ -304,12 +306,17 @@ def leaderboard(commodity: str) -> Dict:
         ranked = sorted(rows, key=lambda r: (r["mase"] is None, r["mase"] or 0, r["mae"] or 0))
         for rank, row in enumerate(ranked, 1):
             row["rank"] = rank
+        # Champion as the pipeline picks it (ml.backtest.champion): lowest validation MASE on the pre-test weeks,
+        # so its hold-out row above is an honest score rather than the best of six on the same weeks
+        validated = [(e.metrics.get("val_mase"), e.metrics.get("mase") or np.inf, m) for m, e in evals.items()
+                     if e.metrics and e.metrics.get("val_mase") is not None and np.isfinite(e.metrics["val_mase"])]
+        champion_id = min(validated)[2] if validated else (ranked[0]["model"] if ranked else None)
         reference = next((e for e in evals.values() if e.window.get("train_start")), None)
         stamps = [e.created_at for e in evals.values() if e.created_at]
         return {"commodity": commodity, "unit": panel()[commodity].unit,
                 **({k: reference.window[k] for k in ("train_start", "train_end", "test_start", "test_end")} if reference else
                    {"train_start": None, "train_end": None, "test_start": None, "test_end": None}),
-                "test_weeks": TEST_WEEKS, "champion": ranked[0]["model"] if ranked else None,
+                "test_weeks": TEST_WEEKS, "champion": champion_id,
                 "updated_at": max(stamps) if stamps else _now(), "rows": ranked}
 
     return _memo.get(_version(), ("leaderboard", commodity), compute)

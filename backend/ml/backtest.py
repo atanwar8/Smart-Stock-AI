@@ -25,10 +25,13 @@ from ml.config import MAX_HORIZON, MIN_CONTEXT, SEASON, TEST_WEEKS
 from ml.models import ENSEMBLE_CANDIDATES, create, ensemble_weights
 from ml.series import WeeklySeries
 
-MAX_ORIGINS = 78   # bound the cost as the store grows: the newest 1.5 years of origins are plenty
-# Training runs written before this version lack the stored forecast path (params["future"]) or used a 26-week
-# horizon; the studio ignores them and the startup check retrains (ml.pipeline.prepare_store).
-STORE_VERSION = 2
+# Bound the cost as the store grows: the newest year of origins. That still leaves ~44 pre-test errors per horizon
+# step for the conformal widths (MIN_CALIBRATION is 8) and ~40 validation origins for the ensemble weights.
+MAX_ORIGINS = 52
+# Training runs written before this version lack the stored forecast path (params["future"]), used a 26-week
+# horizon (v1), or were scored on series that mixed organic rows in and interpolated gaps (v2); the studio
+# ignores them until the next refresh retrains.
+STORE_VERSION = 3
 
 
 @dataclass
@@ -206,7 +209,11 @@ def evaluate(series: WeeklySeries, model_ids: List[str], panel: Optional[Dict] =
 
 
 def champion(evals: Dict[str, ModelEval]) -> Optional[str]:
-    """Lowest hold-out MASE (ties: lower MAE)."""
-    scored = [(e.metrics.get("mase"), e.metrics.get("mae"), m) for m, e in evals.items()
-              if e.metrics and np.isfinite(e.metrics.get("mase", np.nan))]
+    """Lowest validation MASE (pre-test weeks; ties: lower hold-out MASE).
+
+    Picking the best of six on the hold-out itself would make the champion's reported hold-out score look better
+    than it is (selection on the test set). Choosing on validation keeps the hold-out an honest estimate.
+    """
+    scored = [(e.val_mase, e.metrics.get("mase", np.inf), m) for m, e in evals.items()
+              if e.metrics and np.isfinite(e.val_mase)]
     return min(scored)[2] if scored else None

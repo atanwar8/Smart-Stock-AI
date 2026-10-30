@@ -25,7 +25,8 @@ from sqlalchemy.engine import Engine, make_url
 from store.schema import NATURAL_KEY, PRICE_VALUES, forecasts, ingest_runs, metadata, training_runs, usda_prices
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_SQLITE_PATH = BACKEND_DIR / "var" / "smartstock.db"
+# Vercel's filesystem is read-only except /tmp (only used there if SUPABASE_DB_URL is missing)
+DEFAULT_SQLITE_PATH = Path("/tmp/smartstock.db") if os.getenv("VERCEL") else BACKEND_DIR / "var" / "smartstock.db"
 VERSION_TTL_SECONDS = 30   # other workers' writes become visible to this worker's caches within this window
 
 INT_COLUMNS = ("current_ad_count", "priorwk_ad_count", "prioryr_ad_count")
@@ -93,14 +94,23 @@ def make_engine(url: Optional[str] = None, sqlite_path: Optional[Path] = None) -
             if url.startswith(prefix):
                 url = "postgresql+psycopg://" + url[len(prefix):]
         parsed = make_url(url)
+        serverless = bool(os.getenv("VERCEL"))
+        if serverless and (parsed.host or "").endswith("pooler.supabase.com") and parsed.port in (None, 5432):
+            # Session mode gives every client its own server connection (15 in all on Supabase's free plan), and
+            # many short-lived function instances, plus any other host still connected, use them up
+            # ("EMAXCONNSESSION max clients reached"). The transaction pooler on 6543, same host and password,
+            # lends a server connection per transaction instead. The refresh lock is transaction-scoped
+            # (exclusive), so it works there too.
+            parsed = parsed.set(port=6543)
         connect_args = {"connect_timeout": 10}
         if "sslmode" not in parsed.query:
             connect_args["sslmode"] = "require"
         if parsed.port == 6543:
             # Supavisor's transaction pooler can't keep server-side prepared statements between transactions
             connect_args["prepare_threshold"] = None
-        engine = create_engine(url, pool_size=5, max_overflow=5, pool_pre_ping=True, pool_recycle=300,
-                               connect_args=connect_args)
+        # A function instance serves few requests at a time and Supavisor does the real pooling: keep a small pool
+        pool = {"pool_size": 2, "max_overflow": 3} if serverless else {"pool_size": 5, "max_overflow": 5}
+        engine = create_engine(parsed, pool_pre_ping=True, pool_recycle=300, connect_args=connect_args, **pool)
         return engine, "supabase"
 
     path = Path(sqlite_path or os.getenv("SMARTSTOCK_DB_PATH") or DEFAULT_SQLITE_PATH)
@@ -166,6 +176,7 @@ class Store:
         self.engine = engine
         self.backend = backend
         self._version: Tuple[float, Optional[str]] = (0.0, None)
+        self._applied: Optional[str] = None
         self._local_lock = threading.Lock()
 
     @property
@@ -187,9 +198,17 @@ class Store:
             prices = conn.execute(select(func.count(), func.max(usda_prices.c.report_date),
                                          func.max(usda_prices.c.updated_at))).one()
             runs = conn.execute(select(func.max(training_runs.c.id))).scalar()
+            applied = conn.execute(select(func.max(forecasts.c.applied_at))).scalar()
         value = f"{prices[0]}:{iso_date(prices[1])}:{prices[2]}:{runs}"
+        self._applied = str(applied)
         self._version = (time.monotonic(), value)
         return value
+
+    def applied_version(self) -> Optional[str]:
+        """Changes whenever a forecast is applied (read with data_version, same 30 s cache). Kept out of
+        data_version so applying doesn't empty the studio's caches."""
+        self.data_version()
+        return self._applied
 
     def bump_version(self) -> None:
         self._version = (0.0, None)
@@ -263,16 +282,17 @@ class Store:
         return len(new), len(changed)
 
     def read_prices(self, region: Optional[str] = None, commodities: Optional[Iterable[str]] = None) -> pd.DataFrame:
-        """report_date / region / commodity / unit / price for every stored row, in one query."""
+        """report_date / region / commodity / unit / organic / price for every stored row, in one query."""
         query = select(usda_prices.c.report_date, usda_prices.c.region, usda_prices.c.commodity, usda_prices.c.unit,
-                       usda_prices.c.current_wtd_avg_price.label("price")).where(
+                       usda_prices.c.organic, usda_prices.c.current_wtd_avg_price.label("price")).where(
             usda_prices.c.current_wtd_avg_price.isnot(None))
         if region:
             query = query.where(usda_prices.c.region == region)
         if commodities is not None:
             query = query.where(usda_prices.c.commodity.in_(list(commodities)))
         with self.engine.connect() as conn:
-            frame = pd.DataFrame(conn.execute(query).all(), columns=["report_date", "region", "commodity", "unit", "price"])
+            frame = pd.DataFrame(conn.execute(query).all(),
+                                 columns=["report_date", "region", "commodity", "unit", "organic", "price"])
         frame["report_date"] = pd.to_datetime(frame["report_date"])
         frame["price"] = frame["price"].astype(float)
         return frame
@@ -280,6 +300,21 @@ class Store:
     def read_series_rows(self, commodity: str, region: Optional[str] = None) -> pd.DataFrame:
         """One commodity's rows (uses usda_prices_series_idx)."""
         return self.read_prices(region=region, commodities=[commodity])
+
+    def read_rows(self, region: Optional[str] = None) -> pd.DataFrame:
+        """Every stored row (of one region) with the USDA export's columns, in one query: the dashboard's price
+        history (main.py), so its charts and the Forecast Studio read the same weeks."""
+        cols = [c for c in usda_prices.c if c.name not in ("id", "ingest_run_id", "inserted_at", "updated_at")]
+        query = select(*cols)
+        if region:
+            query = query.where(usda_prices.c.region == region)
+        with self.engine.connect() as conn:
+            frame = pd.DataFrame(conn.execute(query).all(), columns=[c.name for c in cols])
+        frame["report_date"] = pd.to_datetime(frame["report_date"])
+        numeric = [c.name for c in cols if c.name.startswith(("price_", "current_", "priorwk_", "prioryr_"))]
+        for name in numeric:  # Postgres numerics arrive as Decimal
+            frame[name] = pd.to_numeric(frame[name], errors="coerce").astype(float)
+        return frame
 
     # ------------------------------------------------------------------ ingest runs
 
@@ -448,6 +483,7 @@ class Store:
                 conn.execute(update(forecasts).where(forecasts.c.id.in_(previous)).values(status="superseded"))
             now = utcnow()
             conn.execute(update(forecasts).where(forecasts.c.id == forecast_id).values(status="applied", applied_at=now))
+        self.bump_version()  # the dashboard re-reads applied forecasts on its next request (main.sync_price_history)
         return {"forecast_id": str(forecast_id), "commodity": row["commodity"], "applied_at": iso_ts(now),
                 "superseded": str(previous[0]) if previous else None}
 

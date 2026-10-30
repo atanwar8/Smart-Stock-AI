@@ -10,6 +10,7 @@ import requests
 
 from core import usda_api
 from ml import pipeline, service
+from ml.backtest import STORE_VERSION
 from store import open_store, set_store
 from store.seed import seed_if_empty
 
@@ -92,7 +93,7 @@ def test_training_stores_forecasts_so_previews_never_fit_a_model(store, monkeypa
     run_refresh()
     assert not pipeline.needs_training(store)
     run = store.latest_training_runs("Tomatoes")["Tomatoes"]["ets"]
-    assert run["params"]["version"] == 2 and len(run["params"]["future"]) == 8
+    assert run["params"]["version"] == STORE_VERSION and len(run["params"]["future"]) == 8
 
     # With stored runs, a preview reads them: fitting or backtesting now would be a bug
     def refuse(*args, **kwargs):
