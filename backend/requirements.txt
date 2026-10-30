@@ -6,7 +6,7 @@ scikit-learn==1.5.2
 lightgbm==4.5.0
 requests==2.32.3
 python-dotenv==1.0.0
-pydantic==2.5.0
+pydantic==2.14.1
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.13
 statsmodels==0.14.4
