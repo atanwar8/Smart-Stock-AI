@@ -34,8 +34,8 @@ a second per vegetable and quoted older prices than the Forecast Studio (the CSV
 - No sleep screen; the first API call after a quiet spell costs a few seconds (Python imports and one read of the
   price history), every later one milliseconds.
 - One forecast per vegetable across Overview, Smart ordering, Alerts and the studio; no web request fits a model.
-- Inventory and alert settings still live in process memory, so on Vercel they are per instance and reset on a cold
-  start. Persisting them in Supabase is the follow-up.
+- Inventory and alert settings were moved into Supabase on 2026-10-30 (`inventory_items`, `app_settings`,
+  migration `20261030000000_kitchen_state.sql`), so every instance and every restart sees the same kitchen.
 - Training on Vercel uses whatever LightGBM can load there; without OpenMP the LightGBM model falls back to
   scikit-learn (the leaderboard shows the scores either way).
 - `render.yaml` was removed. The Dockerfile stays for running the whole app locally like production.

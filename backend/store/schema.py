@@ -1,4 +1,5 @@
-"""SQLAlchemy Core tables mirroring supabase/migrations/20261028000000_training_store.sql.
+"""SQLAlchemy Core tables mirroring supabase/migrations/20261028000000_training_store.sql and
+20261030000000_kitchen_state.sql.
 
 On Supabase the migration is the source of truth (the tables already exist, create_all is a no-op).
 The same definitions create an identical local SQLite store, so every query is written once.
@@ -105,6 +106,24 @@ Index("forecasts_training_run_idx", forecasts.c.training_run_id)
 # At most one applied forecast per commodity (partial unique index on both backends)
 Index("forecasts_one_applied_per_commodity", forecasts.c.commodity, unique=True,
       sqlite_where=forecasts.c.status == "applied", postgresql_where=forecasts.c.status == "applied")
+
+# The kitchen's state (Smart ordering's stock, alert settings): one row per vegetable / per setting
+inventory_items = Table(
+    "inventory_items", metadata,
+    Column("ingredient", Text, primary_key=True),
+    Column("current_stock", Numeric(12, 3, asdecimal=False), nullable=False),
+    Column("daily_usage", Numeric(12, 3, asdecimal=False), nullable=False),
+    Column("max_capacity", Numeric(12, 3, asdecimal=False), nullable=False),
+    Column("unit", Text, nullable=False, default="lbs"),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+app_settings = Table(
+    "app_settings", metadata,
+    Column("key", Text, primary_key=True),
+    Column("value", Json, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 
 NATURAL_KEY = ("report_date", "region", "class", "commodity", "variety", "organic", "unit")
 PRICE_VALUES = ("environment", "price_min", "price_max", "current_ad_count", "current_wtd_avg_price",

@@ -139,7 +139,7 @@ start.sh               One-command local run
 
 ## Known limits
 
-- Inventory and alert settings live in the API process's memory. On Vercel each function instance has its own copy, which starts again from the demo inventory after a quiet spell (a cold start), so stock you log may not survive the night. Moving them into Supabase is the next step. USDA prices, model scores and applied forecasts already persist in the training store.
+- Everything persists in Supabase: USDA prices, model scores, applied forecasts, the stock logged on Smart ordering (`inventory_items`) and the alert settings (`app_settings`), so restarts and every Vercel instance see the same kitchen. The demo stock is added only to an empty store. Alert "Silence 24h" / "Not relevant" choices are kept per browser.
 - The first API call after a quiet spell starts a fresh Python instance (a few seconds: importing pandas and reading the price history from Supabase). The dashboard itself loads from the CDN immediately.
 - Weather comes from [Open-Meteo](https://open-meteo.com/), free without a key for non-commercial use (under 10,000 calls a day; the app caches each ZIP for 30 minutes). Its data is CC BY 4.0, credited on each weather card. A commercial version of SmartStock would need an Open-Meteo plan ([ADR-005](docs/decisions/ADR-005-open-meteo-weather.md)).
 - **Data refresh** needs `MARS_API_KEY`; without it the button is disabled and the page says how to get one. Only one refresh runs at a time.

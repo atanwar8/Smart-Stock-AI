@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from typing import Dict, List, Optional
 import os
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
@@ -98,12 +98,19 @@ class AlertManager:
         self.settings = AlertSettings()
 
     def get_settings(self) -> AlertSettings:
-        """Get current alert settings"""
+        """Current alert settings: the store's copy (the same on every server instance and after a restart)"""
+        try:
+            stored = get_store().get_setting('alert_settings')
+            if stored:
+                self.settings = AlertSettings(**stored)
+        except Exception as e:  # store unreachable: keep the last settings this process knew
+            print(f"⚠️ Alert settings: using the in-memory copy ({e})")
         return self.settings
 
     def update_settings(self, new_settings: AlertSettings) -> bool:
-        """Update alert settings"""
+        """Update alert settings (saved in the store's app_settings)"""
         try:
+            get_store().set_setting('alert_settings', new_settings.model_dump())
             self.settings = new_settings
             print(f"✅ Alert settings updated: Stock threshold={new_settings.low_stock_threshold}d, Price alert={new_settings.price_change_alert}%")
             return True
@@ -114,6 +121,7 @@ class AlertManager:
     def generate_recent_alerts(self, inventory_data: List[Dict], forecaster=None) -> List[AlertItem]:
         """Every alert from current stock levels and the price forecasts, most urgent first (the endpoint pages them)"""
         alerts = []
+        self.get_settings()  # thresholds as saved, even if another instance changed them
 
         for item in inventory_data:
             ingredient, days_left = item['ingredient'], item['days_left']
@@ -258,26 +266,21 @@ class InventoryManager:
                     'message': f'Stock for {days_left:.1f} days available'
                 }
 
-    def update_inventory(self, ingredient: str, current_stock: float, daily_usage: float, max_capacity: float, unit: str = "lbs") -> InventoryItem:
-        """Update inventory item, implementing FIFO logic"""
-
-        # Calculate metrics
+    def _item(self, ingredient: str, current_stock: float, daily_usage: float, max_capacity: float, unit: str,
+              updated_at: datetime) -> InventoryItem:
+        """One tracked vegetable with its derived figures (days left, status, shelf life): computed, never stored"""
         days_left = current_stock / daily_usage if daily_usage > 0 else float('inf')
         shelf_life_days = self.shelf_life_data.get(ingredient, 14)
-
-        # Calculate status
         status_info = self._calculate_status(days_left, shelf_life_days)
-
-        # Create inventory item
-        item_id = str(uuid.uuid4())
-        inventory_item = InventoryItem(
-            id=item_id,
+        return InventoryItem(
+            # Stable per vegetable, so every server instance gives the dashboard the same id for the same row
+            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'smartstock:inventory:{ingredient}')),
             ingredient=ingredient,
             current_stock=current_stock,
             daily_usage=daily_usage,
             max_capacity=max_capacity,
             unit=unit,
-            updated_at=datetime.now(),
+            updated_at=updated_at,
             shelf_life_days=shelf_life_days,
             days_left=days_left,
             status=status_info['status'],
@@ -286,34 +289,52 @@ class InventoryManager:
             status_message=status_info['message']
         )
 
+    def _sync(self) -> None:
+        """Read the logged stock back from the store (Supabase in the cloud), so a restart or another server instance
+        never loses or contradicts it. If the store can't be reached, this process's last copy stays in use."""
+        try:
+            rows = get_store().inventory_rows()
+        except Exception as e:
+            print(f"⚠️ Inventory: using the in-memory copy ({e})")
+            return
+        self.inventory_items = {
+            r['ingredient']: self._item(r['ingredient'], float(r['current_stock']), float(r['daily_usage']),
+                                        float(r['max_capacity']), r['unit'], r['updated_at'])
+            for r in rows
+        }
+
+    def is_empty(self) -> bool:
         with self._lock:
-            # FIFO logic: if we already have this ingredient, update it
-            existing_key = None
-            for key, item in self.inventory_items.items():
-                if item.ingredient == ingredient:
-                    existing_key = key
-                    break
+            self._sync()
+            return not self.inventory_items
 
-            if existing_key:
-                # Update existing item
-                self.inventory_items[existing_key] = inventory_item
-            else:
-                # Add new item, enforce FIFO limit
-                if len(self.inventory_items) >= self.max_items:
-                    # Remove oldest item
-                    oldest_key = min(self.inventory_items.keys(),
-                                   key=lambda k: self.inventory_items[k].updated_at)
-                    del self.inventory_items[oldest_key]
-                    print(f"🔄 FIFO: Removed oldest inventory item")
+    def update_inventory(self, ingredient: str, current_stock: float, daily_usage: float, max_capacity: float, unit: str = "lbs") -> InventoryItem:
+        """Log one vegetable's stock (replacing its previous entry); a fifth vegetable pushes out the oldest (FIFO)"""
+        with self._lock:
+            self._sync()
+            inventory_item = self._item(ingredient, current_stock, daily_usage, max_capacity, unit,
+                                        datetime.now(timezone.utc))
+            evict = None
+            if ingredient not in self.inventory_items and len(self.inventory_items) >= self.max_items:
+                evict = min(self.inventory_items, key=lambda k: self.inventory_items[k].updated_at)
+                print(f"🔄 FIFO: Removed oldest inventory item ({evict})")
+            try:
+                get_store().save_inventory({'ingredient': ingredient, 'current_stock': current_stock,
+                                            'daily_usage': daily_usage, 'max_capacity': max_capacity, 'unit': unit,
+                                            'updated_at': inventory_item.updated_at}, evict=evict)
+            except Exception as e:  # keep working on this instance; the next successful save catches the store up
+                print(f"⚠️ Inventory: not saved to the store ({e})")
+            if evict:
+                self.inventory_items.pop(evict, None)
+            self.inventory_items[ingredient] = inventory_item
 
-                self.inventory_items[item_id] = inventory_item
-
-        print(f"✅ Updated inventory: {ingredient} - {current_stock} {unit}, {days_left:.1f} days left")
+        print(f"✅ Updated inventory: {ingredient} - {current_stock} {unit}, {inventory_item.days_left:.1f} days left")
         return inventory_item
 
     def get_inventory_list(self) -> List[InventoryItem]:
         """Get current inventory list sorted by status priority"""
         with self._lock:
+            self._sync()
             items = list(self.inventory_items.values())
 
         # Sort by status priority: critical, high, good, opportunity
@@ -325,6 +346,7 @@ class InventoryManager:
     def confirm_order(self, ingredient: str, quantity: float, price_per_unit: float, unit: str = "lbs"):
         """Process order confirmation and update inventory"""
         with self._lock:
+            self._sync()
             for key, item in list(self.inventory_items.items()):
                 if item.ingredient == ingredient:
                     # Update stock with new order
@@ -537,7 +559,9 @@ async def _initialize():
     from_store = _history_version['version'] is not None
 
     # A fresh deploy starts with an empty walk-in; give the demo a few tracked items
-    if os.getenv('SEED_DEMO_INVENTORY', '1') == '1' and not inventory_manager.inventory_items:
+    # Only into an empty store: the stock a chef logged must never be replaced by the demo on a restart
+    if (os.getenv('SEED_DEMO_INVENTORY', '1') == '1'
+            and await asyncio.get_running_loop().run_in_executor(None, inventory_manager.is_empty)):
         for ingredient, stock, usage, capacity in [
             ('Tomatoes', 22, 9, 120), ('Lettuce', 30, 7, 80), ('Carrots', 140, 10, 200), ('Broccoli', 36, 4, 90)
         ]:

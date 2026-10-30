@@ -22,7 +22,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine, make_url
 
-from store.schema import NATURAL_KEY, PRICE_VALUES, forecasts, ingest_runs, metadata, training_runs, usda_prices
+from store.schema import (NATURAL_KEY, PRICE_VALUES, app_settings, forecasts, ingest_runs, inventory_items, metadata,
+                          training_runs, usda_prices)
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 # Vercel's filesystem is read-only except /tmp (only used there if SUPABASE_DB_URL is missing)
@@ -44,6 +45,13 @@ class Conflict(RuntimeError):
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value):
+    """Timestamps come back naive from SQLite and aware from Postgres: always hand out aware UTC."""
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
 
 
 def iso_ts(value) -> Optional[str]:
@@ -505,6 +513,48 @@ class Store:
             return result.rowcount or 0
 
     # ------------------------------------------------------------------ locking
+
+    # ------------------------------------------------------------------ kitchen state (inventory, settings)
+
+    def inventory_rows(self) -> List[Dict]:
+        """Every tracked vegetable's logged stock (Smart ordering), one query."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(inventory_items)).mappings().all()
+        return [{**dict(r), "updated_at": _as_utc(r["updated_at"])} for r in rows]
+
+    def save_inventory(self, row: Dict, evict: Optional[str] = None) -> None:
+        """Insert or replace one vegetable's stock (and drop the one it pushed out of the list), atomically."""
+        record = {k: row[k] for k in ("ingredient", "current_stock", "daily_usage", "max_capacity", "unit")}
+        record["updated_at"] = row.get("updated_at") or utcnow()
+        with self.engine.begin() as conn:
+            if evict:
+                conn.execute(inventory_items.delete().where(inventory_items.c.ingredient == evict))
+            if self.is_postgres:
+                stmt = pg_insert(inventory_items).values(**record)
+                stmt = stmt.on_conflict_do_update(index_elements=["ingredient"],
+                                                  set_={k: stmt.excluded[k] for k in record if k != "ingredient"})
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                stmt = sqlite_insert(inventory_items).values(**record)
+                stmt = stmt.on_conflict_do_update(index_elements=["ingredient"],
+                                                  set_={k: stmt.excluded[k] for k in record if k != "ingredient"})
+            conn.execute(stmt)
+
+    def get_setting(self, key: str) -> Optional[Dict]:
+        with self.engine.connect() as conn:
+            value = conn.execute(select(app_settings.c.value).where(app_settings.c.key == key)).scalar()
+        return value
+
+    def set_setting(self, key: str, value: Dict) -> None:
+        record = {"key": key, "value": jsonable(value), "updated_at": utcnow()}
+        with self.engine.begin() as conn:
+            if self.is_postgres:
+                stmt = pg_insert(app_settings).values(**record)
+            else:
+                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+                stmt = sqlite_insert(app_settings).values(**record)
+            conn.execute(stmt.on_conflict_do_update(index_elements=["key"],
+                                                    set_={"value": stmt.excluded.value, "updated_at": stmt.excluded.updated_at}))
 
     @contextmanager
     def exclusive(self, name: str):
