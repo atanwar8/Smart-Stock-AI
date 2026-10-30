@@ -69,7 +69,7 @@ Not verified in the cloud: a real USDA refresh (no
 - [x] Seed Supabase once `SUPABASE_DB_URL` exists; verify row counts with the Supabase MCP; run `get_advisors`.
 - [ ] First real refresh into Supabase (2025-07-25 -> today) with `MARS_API_KEY` + `SUPABASE_DB_URL` set: `POST /api/pipeline/refresh`.
 - [ ] Add `SUPABASE_DB_URL` (session pooler) to the Render service before merging to `main` (merging deploys).
-- [ ] Decide on the Supabase advisor WARN about `public.rls_auto_enable()` (see above).
+- [x] Supabase advisor WARN about `public.rls_auto_enable()`: EXECUTE revoked from public/anon/authenticated (migration 20261030010000); `ensure_rls` still on.
 - [ ] Open the pull request to `main` when the user asks.
 
 ## Move to Vercel + train once, read everywhere (2026-10-30, desktop session)
