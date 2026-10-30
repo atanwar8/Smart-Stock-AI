@@ -122,7 +122,10 @@ def test_leaderboard_ranks_models_against_the_seasonal_naive_baseline(client):
     assert {"seasonal_naive", "ets", "theta", "lightgbm", "ensemble"} <= set(models)
     assert models["seasonal_naive"]["skill"] == pytest.approx(0.0)
     assert [r["rank"] for r in body["rows"]] == list(range(1, len(body["rows"]) + 1))
-    assert body["champion"] == body["rows"][0]["model"]
+    # The champion is picked on the validation weeks before the hold-out (ml.backtest.champion), so it need not
+    # top the hold-out ranking above: choosing on the hold-out would inflate the score it is reported with
+    validation = {m: service.evaluation("Tomatoes", m).metrics.get("val_mase") for m in models}
+    assert body["champion"] == min(validation, key=validation.get)
 
 
 def test_pipeline_endpoints_answer(client):
