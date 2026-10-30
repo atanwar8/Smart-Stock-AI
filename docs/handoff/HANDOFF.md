@@ -1,6 +1,6 @@
 # Handoff — redesign + Forecast Studio + Supabase pipeline
 
-Status: **merged to `main` (PRs #17-#21); Vercel move ready on branch `feat/vercel-read-only-forecasts`, not committed or deployed yet** (see "Move to Vercel" at the end).
+Status: **done and live** (30 Oct 2026). `feat/vercel-read-only-forecasts` merged into `main` (c555365); Vercel deploys `main` to production at https://smartstock-ai-pied.vercel.app (Git-connected; branches get previews). Render is shut down. Open follow-up: persist inventory and alert settings in Supabase.
 Earlier status line, kept for history: **feature-complete on the branch, not merged** (updated 2026-10-29 by the cloud session that resumed this work). Branch `feat/forecast-studio-redesign` on GitHub. The desktop session's uncommitted work was pushed by the user as commit 7738b9e; everything after it is in the commits that follow.
 The contract for all work is [`SPEC.md`](SPEC.md). Each workstream keeps its own running note next to this file:
 [`frontend-shell.md`](frontend-shell.md), [`frontend-studio.md`](frontend-studio.md), [`backend-perf.md`](backend-perf.md), [`ml-pipeline.md`](ml-pipeline.md).

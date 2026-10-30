@@ -2,7 +2,7 @@
 
 Produce price forecasting and smart ordering for restaurants. SmartStock learns weekly USDA retail prices for eleven vegetables, forecasts where each price is heading, and tells a kitchen how much to order and when, based on what's in the walk-in, how fast it's used, and how long it keeps.
 
-Hosted on **Vercel** (the dashboard from the CDN, the API as one Python function) with the training store in **Supabase**. See [Deploying](#deploying).
+**Live:** https://smartstock-ai-pied.vercel.app. Hosted on **Vercel** (the dashboard from the CDN, the API as one Python function) with the training store in **Supabase**; every merge to `main` deploys it. See [Deploying](#deploying).
 
 [![CI](https://github.com/atanwar8/Smart-Stock-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/atanwar8/Smart-Stock-AI/actions/workflows/ci.yml)
 
