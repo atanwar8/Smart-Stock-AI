@@ -9,7 +9,7 @@ COPY smartstock-nextjs/ ./
 RUN npm run build
 
 # 2) FastAPI backend, which also serves the built dashboard at "/"
-FROM python:3.11-slim
+FROM python:3.15-slim
 # WEB_CONCURRENCY = uvicorn worker processes. Keep 1 while inventory and alerts live in process memory
 # (each worker would hold its own copy); see the README's scaling notes before raising it.
 # OMP/OPENBLAS/MKL_NUM_THREADS = 1: inside a container the libraries see the host's cores, not the CPU share the
