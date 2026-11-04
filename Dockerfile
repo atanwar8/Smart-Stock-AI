@@ -1,7 +1,7 @@
 # SmartStock AI: one container serves the dashboard and the forecasting API on $PORT.
 
 # 1) Build the Next.js dashboard as static files (smartstock-nextjs/out)
-FROM node:22-alpine AS ui
+FROM node:26-alpine AS ui
 WORKDIR /ui
 COPY smartstock-nextjs/package.json smartstock-nextjs/package-lock.json ./
 RUN npm ci --no-audit --no-fund
